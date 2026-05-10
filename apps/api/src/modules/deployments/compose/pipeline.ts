@@ -13,14 +13,24 @@
 
 import { repos } from "@repo/db";
 import type { Deployment, Project, Service } from "@repo/db";
-import type { ResourceConfig, MultiServiceRuntimeAdapter, RoutingProvider, SslProvider } from "@repo/adapters";
+import type {
+  ResourceConfig,
+  MultiServiceRuntimeAdapter,
+  RoutingProvider,
+  SslProvider,
+} from "@repo/adapters";
 import { BuildLogger } from "@repo/adapters";
 import { registerResolvedRoutes } from "@repo/adapters";
 
 import type { BuildConfigSnapshotLike } from "../build-config";
 import { onFailure, onSuccess, type LifecycleContext } from "../deployment-lifecycle";
 import * as sessionManager from "../session-manager";
-import { buildServiceRouteDomain, createTrackedSslProvider, ensureRouteDomainRecord, toRoutedDomainInputs } from "../../../lib/routing-domains";
+import {
+  buildServiceRouteDomain,
+  createTrackedSslProvider,
+  ensureRouteDomainRecord,
+  toRoutedDomainInputs,
+} from "../../../lib/routing-domains";
 import type { ComposeService } from "../../../lib/compose-parser";
 import { internalApiUrl } from "../../../config";
 
@@ -50,7 +60,18 @@ async function registerComposeRoutes(opts: {
   userId: string;
   serverId?: string;
 }): Promise<string | undefined> {
-  const { project, runtime, routing, ssl, logger, services, deployedServices, usesManagedRouting, userId, serverId } = opts;
+  const {
+    project,
+    runtime,
+    routing,
+    ssl,
+    logger,
+    services,
+    deployedServices,
+    usesManagedRouting,
+    userId,
+    serverId,
+  } = opts;
   const byName = new Map(services.map((s) => [s.name, s]));
   const seenDomains = new Set<string>();
   let firstPublicUrl: string | undefined;
@@ -61,7 +82,9 @@ async function registerComposeRoutes(opts: {
   });
 
   if (exposedServices.length === 0) {
-    logger.log("No compose services are configured for public routing. Skipping route registration.\n");
+    logger.log(
+      "No compose services are configured for public routing. Skipping route registration.\n",
+    );
     return undefined;
   }
 
@@ -70,15 +93,25 @@ async function registerComposeRoutes(opts: {
   const domainByHostname = new Map(projectDomains.map((d) => [d.hostname.toLowerCase(), d]));
   const trackedSsl = createTrackedSslProvider(ssl, domainByHostname);
 
-  logger.log(`Configuring public routes for ${exposedServices.length} compose service${exposedServices.length === 1 ? "" : "s"}...\n`);
+  logger.log(
+    `Configuring public routes for ${exposedServices.length} compose service${exposedServices.length === 1 ? "" : "s"}...\n`,
+  );
 
   for (const deployed of exposedServices) {
     const input = byName.get(deployed.serviceName);
     if (!input || !deployed.ip) continue;
 
-    const port = parseServicePort(input.exposedPort ?? undefined) ?? parseServicePort(input.ports?.[0] ?? undefined);
+    const port =
+      parseServicePort(input.exposedPort ?? undefined) ??
+      parseServicePort(input.ports?.[0] ?? undefined);
     if (!port) {
-      logger.log(`Skipping route for service "${deployed.serviceName}" — no routable port configured.\n`, "warn");
+      logger.log(
+        `Skipping route for service "${deployed.serviceName}" — no routable port configured.\n`,
+        "warn",
+        {
+          serviceName: deployed.serviceName,
+        },
+      );
       continue;
     }
 
@@ -90,7 +123,13 @@ async function registerComposeRoutes(opts: {
     });
 
     if (!route) {
-      logger.log(`Skipping route for service "${deployed.serviceName}" — no domain configured.\n`, "warn");
+      logger.log(
+        `Skipping route for service "${deployed.serviceName}" — no domain configured.\n`,
+        "warn",
+        {
+          serviceName: deployed.serviceName,
+        },
+      );
       continue;
     }
 
@@ -105,17 +144,38 @@ async function registerComposeRoutes(opts: {
       domainByHostname,
     });
     if (!beforeRecord && domainRecord) {
-      logger.log(`Created domain record for "${route.hostname}" (service: ${deployed.serviceName}).\n`);
+      logger.log(
+        `Created domain record for "${route.hostname}" (service: ${deployed.serviceName}).\n`,
+        "info",
+        {
+          serviceName: deployed.serviceName,
+        },
+      );
     }
 
     const targetUrl = `http://${deployed.ip}:${port}`;
 
-    logger.log(`Configuring public route for service "${deployed.serviceName}" (${targetUrl})...\n`);
-    const routeOpts = project.webhookDomain ? {
-      webhookDomain: project.webhookDomain,
-      webhookProxy: `${internalApiUrl}/api/webhooks/`,
-    } : undefined;
-    await registerResolvedRoutes(logger, routing, trackedSsl, toRoutedDomainInputs([route]), { targetUrl }, routeOpts);
+    logger.log(
+      `Configuring public route for service "${deployed.serviceName}" (${targetUrl})...\n`,
+      "info",
+      {
+        serviceName: deployed.serviceName,
+      },
+    );
+    const routeOpts = project.webhookDomain
+      ? {
+          webhookDomain: project.webhookDomain,
+          webhookProxy: `${internalApiUrl}/api/webhooks/`,
+        }
+      : undefined;
+    await registerResolvedRoutes(
+      logger,
+      routing,
+      trackedSsl,
+      toRoutedDomainInputs([route]),
+      { targetUrl },
+      routeOpts,
+    );
 
     // ── Sync free subdomains with managed edge proxy ─────────────
     if (usesManagedRouting && route.isCloud && route.managedSubdomain) {
@@ -166,6 +226,7 @@ export interface ComposePipelineOpts {
   buildSessionId: string;
   buildEnvVars: Record<string, string>;
   buildResources: ResourceConfig;
+  runtimeResources: ResourceConfig;
   gitToken?: string;
 }
 
@@ -178,7 +239,22 @@ export interface ComposePipelineOpts {
  * after this function completes.
  */
 export async function executeComposePipeline(opts: ComposePipelineOpts): Promise<void> {
-  const { project, dep, runtime, routing, ssl, usesManagedRouting, logger, ctx, snapshot, buildSessionId, buildEnvVars, buildResources, gitToken } = opts;
+  const {
+    project,
+    dep,
+    runtime,
+    routing,
+    ssl,
+    usesManagedRouting,
+    logger,
+    ctx,
+    snapshot,
+    buildSessionId,
+    buildEnvVars,
+    buildResources,
+    runtimeResources,
+    gitToken,
+  } = opts;
 
   // ── Build phase: produce an image for each buildable service ───────
   const composeBuild = await buildComposeImages({
@@ -194,7 +270,8 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
   });
 
   // ── Early exit: if all buildable services failed, fail the deployment ──
-  const hasBuildableServices = composeBuild.buildFailures.size > 0 || composeBuild.imageRefs.size > 0;
+  const hasBuildableServices =
+    composeBuild.buildFailures.size > 0 || composeBuild.imageRefs.size > 0;
   const allBuildsFailed =
     hasBuildableServices &&
     composeBuild.buildFailures.size > 0 &&
@@ -231,6 +308,7 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
   const composeResult = await deployComposeServices(project, dep, runtime, logger, {
     builtImages: composeBuild.imageRefs,
     buildFailures: composeBuild.buildFailures,
+    resources: runtimeResources,
   });
 
   // ── Lifecycle: success or failure ──────────────────────────────────
@@ -256,7 +334,8 @@ export async function executeComposePipeline(opts: ComposePipelineOpts): Promise
         serverId: snapshot.serverId,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to configure compose service routes";
+      const message =
+        err instanceof Error ? err.message : "Failed to configure compose service routes";
       await onFailure(ctx, message, composeBuild.durationMs);
       return;
     }

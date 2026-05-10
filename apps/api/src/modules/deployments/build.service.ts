@@ -3,17 +3,52 @@
  */
 
 import { repos, type Project, type Deployment } from "@repo/db";
-import { AppError, NotFoundError, ForbiddenError, DeployError, BUILD_ENV_VARS, SYSTEM, STACKS, getRuntimeImage, type StackId, type DeployTarget, type BuildStrategy, type StackDefinition } from "@repo/core";
-import type { BuildConfig, CommandExecutor, DeployConfig, DeployEnvironment, LogEntry, ResourceConfig } from "@repo/adapters";
-import { BareRuntime, BuildLogger, CloudRuntime, DEFAULT_BUILD_RESOURCE_CONFIG, DockerRuntime, ensurePortAvailable, runDeployPipeline, createPlatform, isMultiServiceRuntime } from "@repo/adapters";
+import {
+  AppError,
+  NotFoundError,
+  ForbiddenError,
+  DeployError,
+  BUILD_ENV_VARS,
+  SYSTEM,
+  STACKS,
+  getRuntimeImage,
+  type StackId,
+  type DeployTarget,
+  type BuildStrategy,
+  type StackDefinition,
+} from "@repo/core";
+import type {
+  BuildConfig,
+  CommandExecutor,
+  DeployConfig,
+  DeployEnvironment,
+  LogEntry,
+  ResourceConfig,
+} from "@repo/adapters";
+import {
+  BareRuntime,
+  BuildLogger,
+  CloudRuntime,
+  DEFAULT_BUILD_RESOURCE_CONFIG,
+  DockerRuntime,
+  ensurePortAvailable,
+  runDeployPipeline,
+  createPlatform,
+  isMultiServiceRuntime,
+} from "@repo/adapters";
 import { platform } from "../../lib/controller-helpers";
 import { env, internalApiUrl } from "../../config";
 import { resolveDeploymentRuntime, resolveDeploymentPlatform } from "../../lib/deployment-runtime";
 import { ensureManagedEdgeProxy } from "../../lib/managed-edge-proxy";
 import { encrypt, decrypt } from "../../lib/encryption";
-import { buildProjectRouteDomains, createTrackedSslProvider, ensureRouteDomainRecord, toRoutedDomainInputs } from "../../lib/routing-domains";
+import {
+  buildProjectRouteDomains,
+  createTrackedSslProvider,
+  ensureRouteDomainRecord,
+  toRoutedDomainInputs,
+} from "../../lib/routing-domains";
 import { withDefaults } from "../../lib/resources";
-import { resolveToken } from "../github/github.auth";
+import { getInstallationToken, resolveToken } from "../github/github.auth";
 import { getLatestCommit, getRepository } from "../github/github.service";
 import { pruneRetainedBareReleases } from "./release-retention";
 import * as sessionManager from "./session-manager";
@@ -88,15 +123,53 @@ function collapseTerminalLogs(entries: LogEntry[]): LogEntry[] {
   return result;
 }
 
+async function resolveBuildGitToken(opts: {
+  userId: string;
+  owner?: string | null;
+  effectiveTarget: DeployTarget;
+}): Promise<string | null> {
+  const owner = opts.owner ?? undefined;
+
+  if (opts.effectiveTarget === "cloud") {
+    if (!owner) return null;
+    const token = await getInstallationToken(opts.userId, owner).catch((err) => {
+      const message = err instanceof Error ? err.message : "Unknown GitHub App error";
+      throw new AppError(
+        `Cannot access ${owner} with the GitHub App installation token: ${message}`,
+        403,
+        "GITHUB_APP_INSTALLATION_TOKEN_FAILED",
+      );
+    });
+
+    if (!token) {
+      throw new AppError(
+        `Cannot access ${owner} with the GitHub App. Install or reconnect the GitHub App for this owner and deploy again.`,
+        403,
+        "GITHUB_APP_INSTALLATION_REQUIRED",
+      );
+    }
+
+    return token;
+  }
+
+  return resolveToken({
+    userId: opts.userId,
+    owner,
+  }).catch(() => null);
+}
+
 function throwPreflightFailure(preflight: PreflightResult): never {
   const failedChecks = preflight.checks.filter((check) => check.status === "fail");
-  const failures = failedChecks
-    .map((check) => `${check.label}: ${check.message}`)
-    .join("; ");
-  const codes = Array.from(new Set(failedChecks.map((check) => check.code).filter((code): code is string => Boolean(code))));
-  const errorCode = codes.length === 1 && failedChecks.every((check) => check.code === codes[0])
-    ? codes[0]
-    : "PRE_DEPLOY_CHECKS_FAILED";
+  const failures = failedChecks.map((check) => `${check.label}: ${check.message}`).join("; ");
+  const codes = Array.from(
+    new Set(
+      failedChecks.map((check) => check.code).filter((code): code is string => Boolean(code)),
+    ),
+  );
+  const errorCode =
+    codes.length === 1 && failedChecks.every((check) => check.code === codes[0])
+      ? codes[0]
+      : "PRE_DEPLOY_CHECKS_FAILED";
 
   throw new AppError(`Pre-deploy checks failed: ${failures}`, 403, errorCode);
 }
@@ -151,6 +224,10 @@ export interface DeploymentConfigSnapshot {
   hasBuild: boolean;
   /** Custom domain from deploy input (e.g. "app.example.com") */
   customDomain?: string;
+  /** Free subdomain slug captured when the deployment is created. */
+  domain?: string;
+  /** Domain mode captured when the deployment is created. */
+  domainType?: "free" | "custom";
   /** Absolute path to a local project directory (alternative to repoUrl) */
   localPath?: string;
   /** Build strategy: "server" (build in workspace) or "local" (build on host) */
@@ -191,7 +268,11 @@ export interface BuildAccessInput {
 
 /** Build a config snapshot from the project — pure pass-through, no fallbacks.
  *  All values must be set by prepare / ensureProject before this is called. */
-function buildConfigSnapshot(project: Project, branch?: string, customDomain?: string): DeploymentConfigSnapshot {
+function buildConfigSnapshot(
+  project: Project,
+  branch?: string,
+  customDomain?: string,
+): DeploymentConfigSnapshot {
   const runtimeImage = resolveRuntimeImage(project);
 
   return {
@@ -213,8 +294,14 @@ function buildConfigSnapshot(project: Project, branch?: string, customDomain?: s
     hasServer: project.hasServer ?? !!project.startCommand?.trim(),
     hasBuild: project.hasBuild ?? true,
     customDomain: customDomain || undefined,
+    domain: project.slug,
+    domainType: customDomain ? "custom" : "free",
     localPath: project.localPath || undefined,
   };
+}
+
+function snapshotSlug(snapshot: DeploymentConfigSnapshot, project: Project) {
+  return snapshot.domain || project.slug;
 }
 
 async function resolveProjectBranch(userId: string, project: Project, branch?: string) {
@@ -231,9 +318,9 @@ async function resolveProjectBranch(userId: string, project: Project, branch?: s
 
 function resolveRuntimeImage(project: Project): string {
   const hasServer = project.hasServer ?? !!project.startCommand?.trim();
-  const stackId = (project.framework && project.framework in STACKS
-    ? project.framework
-    : "unknown") as StackId;
+  const stackId = (
+    project.framework && project.framework in STACKS ? project.framework : "unknown"
+  ) as StackId;
 
   if (!hasServer) {
     return getRuntimeImage("static", project.packageManager ?? undefined);
@@ -243,8 +330,15 @@ function resolveRuntimeImage(project: Project): string {
 }
 
 /** Parse productionPaths from DB text (comma-separated) with STACKS fallback. */
-function parseProductionPaths(raw: string | null | undefined, framework: string | null | undefined): string[] {
-  if (raw) return raw.split(",").map((s) => s.trim()).filter(Boolean);
+function parseProductionPaths(
+  raw: string | null | undefined,
+  framework: string | null | undefined,
+): string[] {
+  if (raw)
+    return raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
   if (framework && framework in STACKS) {
     const paths = STACKS[framework as StackId] as StackDefinition;
     return paths.productionPaths ? [...paths.productionPaths] : [];
@@ -267,7 +361,11 @@ function decryptEnvVars(encrypted: unknown): Record<string, string> {
   const map: Record<string, string> = {};
   if (!encrypted || typeof encrypted !== "object") return map;
   for (const [k, v] of Object.entries(encrypted as Record<string, string>)) {
-    try { map[k] = decrypt(v); } catch { map[k] = v; }
+    try {
+      map[k] = decrypt(v);
+    } catch {
+      map[k] = v;
+    }
   }
   return map;
 }
@@ -293,9 +391,7 @@ async function checkNoActiveBuild(projectId: string) {
     page: 1,
     perPage: SYSTEM.DEPLOYMENTS.MAX_CONCURRENT_PER_PROJECT + 1,
   });
-  const active = rows.find((d) =>
-    ["queued", "building", "deploying"].includes(d.status),
-  );
+  const active = rows.find((d) => ["queued", "building", "deploying"].includes(d.status));
   if (active) {
     throw new ForbiddenError(
       `A deployment is already in progress (${active.id}). Cancel it first or wait for it to complete.`,
@@ -341,7 +437,7 @@ async function createQueuedDeployment(opts: {
     });
   } catch (err) {
     // Atomicity: clean up orphaned deployment
-    await repos.deployment.deleteDeployment(dep.id).catch(() => { });
+    await repos.deployment.deleteDeployment(dep.id).catch(() => {});
     throw err;
   }
 
@@ -374,7 +470,18 @@ export async function respondToPrompt(
 }
 
 export async function requestBuildAccess(userId: string, input: BuildAccessInput) {
-  const { projectId, branch, environment, envVars, customDomain, buildStrategy, deployTarget, serverId, runtimeMode, services } = input;
+  const {
+    projectId,
+    branch,
+    environment,
+    envVars,
+    customDomain,
+    buildStrategy,
+    deployTarget,
+    serverId,
+    runtimeMode,
+    services,
+  } = input;
 
   const project = await repos.project.findById(projectId);
   if (!project || project.userId !== userId) {
@@ -410,7 +517,7 @@ export async function requestBuildAccess(userId: string, input: BuildAccessInput
   // ── Preflight: validate config + domain before creating any resources ──
   const preflight = await runPreflightChecks(snapshot, {
     customDomain: snapshot.customDomain,
-    slug: project.slug,
+    slug: snapshotSlug(snapshot, project),
     userId,
     composeServices: snapshot.composeServices,
   });
@@ -470,8 +577,8 @@ export async function getBuildSessionStatus(deploymentId: string, userId: string
   const buildSessionRow = await repos.deployment.findBuildSessionByDeploymentId(deploymentId);
 
   const memSession = sessionManager.getSession(deploymentId);
-  const isActive = memSession != null &&
-    !["ready", "failed", "cancelled"].includes(memSession.status);
+  const isActive =
+    memSession != null && !["ready", "failed", "cancelled"].includes(memSession.status);
 
   const logEntries = isActive
     ? (memSession?.logs ?? (buildSessionRow?.logs as LogEntry[] | null) ?? [])
@@ -531,35 +638,36 @@ export async function getBuildSessionStatus(deploymentId: string, userId: string
   }
 
   const projectType = isComposeProject(project)
-    ? "services" as const
+    ? ("services" as const)
     : snapshot?.runtimeMode === "docker"
-      ? "docker" as const
-      : "app" as const;
+      ? ("docker" as const)
+      : ("app" as const);
 
-  const composeData = projectType === "services"
-    ? await Promise.all([
-      repos.service.listByDeployment(deploymentId).catch(() => []),
-      repos.service.listByProject(project.id).catch(() => []),
-    ]).then(([deploymentServices, projectServices]) => ({
-      composeDeployment: snapshot?.composeDeployment ?? null,
-      serviceStatuses: deploymentServices.map((service) => ({
-        serviceId: service.serviceId,
-        status: service.status,
-        containerId: service.containerId,
-        hostPort: service.hostPort,
-        ip: service.ip,
-        imageRef: service.imageRef,
-      })),
-      services: projectServices
-        .filter((service) => service.enabled)
-        .map((service) => ({
-          serviceId: service.id,
-          serviceName: service.name,
-          image: service.image,
-          build: service.build,
-        })),
-    }))
-    : {};
+  const composeData =
+    projectType === "services"
+      ? await Promise.all([
+          repos.service.listByDeployment(deploymentId).catch(() => []),
+          repos.service.listByProject(project.id).catch(() => []),
+        ]).then(([deploymentServices, projectServices]) => ({
+          composeDeployment: snapshot?.composeDeployment ?? null,
+          serviceStatuses: deploymentServices.map((service) => ({
+            serviceId: service.serviceId,
+            status: service.status,
+            containerId: service.containerId,
+            hostPort: service.hostPort,
+            ip: service.ip,
+            imageRef: service.imageRef,
+          })),
+          services: projectServices
+            .filter((service) => service.enabled)
+            .map((service) => ({
+              serviceId: service.id,
+              serviceName: service.name,
+              image: service.image,
+              build: service.build,
+            })),
+        }))
+      : {};
 
   return {
     success: true,
@@ -575,7 +683,9 @@ export async function getBuildSessionStatus(deploymentId: string, userId: string
       projectName: project.name,
       framework: snapshot?.framework || project.framework,
       branch: dep.branch ?? project.gitBranch,
-      domain: "",
+      domain: snapshot?.domain || project.slug,
+      domainType: snapshot?.domainType || (snapshot?.customDomain ? "custom" : "free"),
+      customDomain: snapshot?.customDomain || "",
       buildCommand: snapshot?.buildCommand,
       outputDirectory: snapshot?.outputDirectory,
       installCommand: snapshot?.installCommand,
@@ -590,13 +700,13 @@ export async function getBuildSessionStatus(deploymentId: string, userId: string
     buildDurationMs: buildSessionRow?.durationMs ?? null,
     buildStartedAt: buildSessionRow?.startedAt?.toISOString() ?? null,
     failureMessage: effectiveStatus === "failed" ? dep.errorMessage || "" : "",
-    warningMessage: effectiveStatus === "ready"
-      ? (snapshot?.composeDeployment?.warningMessage || "")
-      : "",
+    warningMessage:
+      effectiveStatus === "ready" ? snapshot?.composeDeployment?.warningMessage || "" : "",
     previousActiveDeploymentId: snapshot?.previousActiveDeploymentId ?? null,
-    errorCode: dep.errorMessage?.includes("PORT_IN_USE") || dep.errorMessage?.includes("EADDRINUSE")
-      ? "PORT_IN_USE"
-      : undefined,
+    errorCode:
+      dep.errorMessage?.includes("PORT_IN_USE") || dep.errorMessage?.includes("EADDRINUSE")
+        ? "PORT_IN_USE"
+        : undefined,
     projectType,
     ...composeData,
   };
@@ -615,10 +725,10 @@ export async function cancelBuildSession(deploymentId: string, userId: string) {
 
   const { runtime } = platform();
   if (dep.status === "building") {
-    await runtime.cancelBuild(dep.id).catch(() => { });
+    await runtime.cancelBuild(dep.id).catch(() => {});
   }
   if (dep.containerId) {
-    await runtime.destroy(dep.containerId).catch(() => { });
+    await runtime.destroy(dep.containerId).catch(() => {});
   }
 
   // Mark all pending/building services as failed so UI stops showing spinners
@@ -650,8 +760,9 @@ export async function redeployBuildSession(deploymentId: string, userId: string)
   const resolvedBranch = await resolveProjectBranch(userId, project, oldDep.branch ?? undefined);
 
   // Prefer the old deployment's snapshot; fall back to a fresh one from the project
-  const meta = (oldDep.meta as DeploymentConfigSnapshot | null)
-    ?? buildConfigSnapshot(project, resolvedBranch);
+  const meta =
+    (oldDep.meta as DeploymentConfigSnapshot | null) ??
+    buildConfigSnapshot(project, resolvedBranch);
 
   const dep = await createQueuedDeployment({
     projectId: project.id,
@@ -704,7 +815,17 @@ export async function startBuild(deploymentId: string, userId: string) {
 
 // ─── Trigger deployment (internal build pipeline) ────────────────────────────
 
-export async function triggerDeployment(userId: string, data: { projectId: string; branch?: string; commitSha?: string; commitMessage?: string; environment?: string; trigger?: string }) {
+export async function triggerDeployment(
+  userId: string,
+  data: {
+    projectId: string;
+    branch?: string;
+    commitSha?: string;
+    commitMessage?: string;
+    environment?: string;
+    trigger?: string;
+  },
+) {
   const project = await repos.project.findById(data.projectId);
   if (!project || project.userId !== userId) {
     throw new NotFoundError("Project", data.projectId);
@@ -722,7 +843,10 @@ export async function triggerDeployment(userId: string, data: { projectId: strin
   const snapshot = buildConfigSnapshot(project, branch);
 
   // ── Preflight: validate config before creating any resources ────
-  const preflight = await runPreflightChecks(snapshot, { slug: project.slug, userId });
+  const preflight = await runPreflightChecks(snapshot, {
+    slug: snapshotSlug(snapshot, project),
+    userId,
+  });
   if (!preflight.ok) {
     throwPreflightFailure(preflight);
   }
@@ -775,11 +899,7 @@ export async function triggerDeployment(userId: string, data: { projectId: strin
 
 // ─── Build & Deploy pipeline (private) ───────────────────────────────────────
 
-async function executeBuildAndDeploy(
-  project: Project,
-  dep: Deployment,
-  buildSessionId: string,
-) {
+async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSessionId: string) {
   const plat = platform();
   let { runtime, routing, ssl, system } = plat;
 
@@ -840,10 +960,7 @@ async function executeBuildAndDeploy(
     sessionManager.updateStatus(dep.id, "building");
 
     const prodResources = withDefaults(snapshot.resources);
-    const buildResources = withDefaults(
-      snapshot.buildResources,
-      DEFAULT_BUILD_RESOURCE_CONFIG,
-    );
+    const buildResources = withDefaults(snapshot.buildResources, DEFAULT_BUILD_RESOURCE_CONFIG);
 
     // Decrypt env vars from deployment (self-contained)
     const envMap = decryptEnvVars(dep.envVars);
@@ -859,11 +976,14 @@ async function executeBuildAndDeploy(
       );
     }
 
-    // Resolve a fresh GitHub token for cloning (private repos)
-    const gitToken = await resolveToken({
+    // Resolve a fresh GitHub token for cloning private repos.
+    // Cloud/SaaS builds must use GitHub App installation tokens; local/server
+    // builds keep the user's configured local/OAuth/token resolver.
+    const gitToken = await resolveBuildGitToken({
       userId: dep.userId,
       owner: project.gitOwner ?? undefined,
-    }).catch(() => null);
+      effectiveTarget,
+    });
 
     const buildConfig = createBuildConfig({
       project,
@@ -893,6 +1013,7 @@ async function executeBuildAndDeploy(
         buildSessionId,
         buildEnvVars: buildEnv.envVars,
         buildResources,
+        runtimeResources: prodResources,
         gitToken: gitToken ?? undefined,
       });
       return;
@@ -907,7 +1028,11 @@ async function executeBuildAndDeploy(
     }
 
     if (!snapshot.hasBuild) {
-      logger.step("build", "completed", "Build disabled — skipping install & build, using source directly");
+      logger.step(
+        "build",
+        "completed",
+        "Build disabled — skipping install & build, using source directly",
+      );
     }
 
     const buildResult = await runtime.build(buildConfig, logger);
@@ -955,7 +1080,7 @@ async function executeBuildAndDeploy(
         envVars: envMap,
         resources: prodResources,
         restartPolicy: "no",
-        slug: project.slug,
+        slug: snapshotSlug(snapshot, project),
         customDomain: snapshot.customDomain,
         outputDirectory: snapshot.outputDirectory,
         projectName: project.name,
@@ -978,7 +1103,8 @@ async function executeBuildAndDeploy(
       // ── Server deploy (existing VM pipeline) ───────────────────────
       // Static sites are always served directly from the web server (OpenResty)
       // via file-backed routes — Docker is only for server apps.
-      const staticBareRuntime = !snapshot.hasServer && runtime instanceof BareRuntime ? runtime : null;
+      const staticBareRuntime =
+        !snapshot.hasServer && runtime instanceof BareRuntime ? runtime : null;
       const isStaticSelfHosted = staticBareRuntime !== null;
 
       const deployConfig: DeployConfig = {
@@ -993,11 +1119,9 @@ async function executeBuildAndDeploy(
         envVars: envMap,
         resources: prodResources,
         restartPolicy: isStaticSelfHosted ? "no" : "always",
-        slug: project.slug,
+        slug: snapshotSlug(snapshot, project),
         outputDirectory: snapshot.outputDirectory,
-        productionPaths: snapshot.productionPaths.length
-          ? snapshot.productionPaths
-          : undefined,
+        productionPaths: snapshot.productionPaths.length ? snapshot.productionPaths : undefined,
       };
 
       // Gather inputs for the deploy pipeline
@@ -1005,7 +1129,9 @@ async function executeBuildAndDeploy(
         ? await repos.deployment.findById(project.activeDeploymentId)
         : null;
       const previousRuntime = prevDep?.containerId
-        ? await resolveDeploymentRuntime(prevDep).then(r => r.runtime).catch(() => runtime)
+        ? await resolveDeploymentRuntime(prevDep)
+            .then((r) => r.runtime)
+            .catch(() => runtime)
         : runtime;
 
       // ── Gather all domains that need routing ───────────────────────
@@ -1013,11 +1139,14 @@ async function executeBuildAndDeploy(
       // Every domain gets an OpenResty route; SSL is provisioned only for
       // custom domains — the free host subdomain skips SSL (user manages it).
       const projectDomains = await repos.domain.listByProject(project.id);
-      const domainByHostname = new Map(projectDomains.map((domain) => [domain.hostname.toLowerCase(), domain]));
+      const domainByHostname = new Map(
+        projectDomains.map((domain) => [domain.hostname.toLowerCase(), domain]),
+      );
       const plannedDomains = buildProjectRouteDomains({
         project,
         projectDomains,
         customDomain: snapshot.customDomain,
+        managedSlug: snapshotSlug(snapshot, project),
         runtimeName: runtime.name,
         usesManagedRouting,
       });
@@ -1038,50 +1167,57 @@ async function executeBuildAndDeploy(
       const deployEnv: DeployEnvironment = {
         preflight: targetExecutor
           ? async (cfg, promptUser) => {
-            if (system) {
-              const systemLog = (entry: { message: string; level: "info" | "warn" | "error" }) => {
-                logger.log(`${entry.message}\n`, entry.level);
-              };
+              if (system) {
+                const systemLog = (entry: {
+                  message: string;
+                  level: "info" | "warn" | "error";
+                }) => {
+                  logger.log(`${entry.message}\n`, entry.level);
+                };
+
+                if (!isStaticSelfHosted) {
+                  await system.ensureFeature("deploy", systemLog);
+                }
+                if (plannedDomains.length > 0) {
+                  await system.ensureFeature("routing", systemLog);
+                }
+                if (plannedDomains.some((d) => d.provisionSsl)) {
+                  await system.ensureFeature("ssl", systemLog);
+                }
+              }
 
               if (!isStaticSelfHosted) {
-                await system.ensureFeature("deploy", systemLog);
-              }
-              if (plannedDomains.length > 0) {
-                await system.ensureFeature("routing", systemLog);
-              }
-              if (plannedDomains.some((d) => d.provisionSsl)) {
-                await system.ensureFeature("ssl", systemLog);
+                await ensurePortAvailable(targetExecutor, cfg.port, logger, promptUser);
               }
             }
-
-            if (!isStaticSelfHosted) {
-              await ensurePortAvailable(targetExecutor, cfg.port, logger, promptUser);
-            }
-          }
           : undefined,
         activate: async (cfg, onLog) => {
           const r = isStaticSelfHosted
             ? await staticBareRuntime.deployStatic({
-              ...cfg,
-              outputDirectory: cfg.outputDirectory ?? snapshot.outputDirectory,
-            })
+                ...cfg,
+                outputDirectory: cfg.outputDirectory ?? snapshot.outputDirectory,
+              })
             : await runtime.deploy(cfg, onLog);
           if (!r.containerId) throw new Error("Deploy produced no container");
           return { containerId: r.containerId, url: r.url };
         },
-        deactivate: (id) => (previousRuntime.name === "bare" && !id.includes("/"))
-          ? previousRuntime.stop(id)
-          : previousRuntime.destroy(id),
+        deactivate: (id) =>
+          previousRuntime.name === "bare" && !id.includes("/")
+            ? previousRuntime.stop(id)
+            : previousRuntime.destroy(id),
         resolveRoute: isStaticSelfHosted
           ? async (id, cfg) => ({
-            staticRoot: staticBareRuntime.resolveStaticRoot(id, cfg.outputDirectory ?? snapshot.outputDirectory),
-          })
+              staticRoot: staticBareRuntime.resolveStaticRoot(
+                id,
+                cfg.outputDirectory ?? snapshot.outputDirectory,
+              ),
+            })
           : undefined,
         resolveTargetUrl: runtime.supports("containerIp")
           ? async (id, port) => {
-            const ip = await runtime.getContainerIp(id);
-            return ip ? `http://${ip}:${port}` : null;
-          }
+              const ip = await runtime.getContainerIp(id);
+              return ip ? `http://${ip}:${port}` : null;
+            }
           : undefined,
       };
 
@@ -1093,18 +1229,24 @@ async function executeBuildAndDeploy(
         ? createTrackedSslProvider(ssl, domainByHostname)
         : ssl;
 
-      const deployResult = await runDeployPipeline(deployEnv, {
-        config: deployConfig,
-        previousContainerId: prevDep?.containerId ?? undefined,
-        domains: toRoutedDomainInputs(plannedDomains),
-        routing,
-        ssl: deploySsl,
-        routeOptions: project.webhookDomain ? {
-          webhookDomain: project.webhookDomain,
-          webhookProxy: `${internalApiUrl}/api/webhooks/`,
-        } : undefined,
-        promptUser: (prompt) => sessionManager.promptUser(dep.id, prompt),
-      }, logger);
+      const deployResult = await runDeployPipeline(
+        deployEnv,
+        {
+          config: deployConfig,
+          previousContainerId: prevDep?.containerId ?? undefined,
+          domains: toRoutedDomainInputs(plannedDomains),
+          routing,
+          ssl: deploySsl,
+          routeOptions: project.webhookDomain
+            ? {
+                webhookDomain: project.webhookDomain,
+                webhookProxy: `${internalApiUrl}/api/webhooks/`,
+              }
+            : undefined,
+          promptUser: (prompt) => sessionManager.promptUser(dep.id, prompt),
+        },
+        logger,
+      );
 
       if (deployResult.status === "failed") {
         await onFailure(ctx, deployResult.error, buildResult.durationMs, {
@@ -1130,7 +1272,10 @@ async function executeBuildAndDeploy(
       ) {
         await previousRuntime.removeImage(prevDep.imageRef).catch((err) => {
           const message = err instanceof Error ? err.message : String(err);
-          logger.log(`Warning: failed to remove previous image ${prevDep.imageRef}: ${message}\n`, "warn");
+          logger.log(
+            `Warning: failed to remove previous image ${prevDep.imageRef}: ${message}\n`,
+            "warn",
+          );
         });
       }
 

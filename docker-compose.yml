@@ -55,7 +55,6 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: change-me-in-production
       BETTER_AUTH_SECRET: change-me-in-production   # used for session signing
-      TRUSTED_ORIGINS: http://localhost:3001,http://localhost:3000
     depends_on:
       - postgres
       - redis
@@ -70,7 +69,6 @@ services:
       - "3001:3001"
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_URL: http://api:4000/api
     depends_on:
       - api
 

@@ -1,11 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import {
-  validateSshPayload,
-  LOCAL_API_URL,
-  LOCAL_DASHBOARD_URL,
-} from "@repo/onboarding";
+import { LOCAL_API_URL, LOCAL_DASHBOARD_URL } from "@repo/core";
+import { validateSshPayload } from "@repo/onboarding";
 import type { SshPayload } from "@repo/onboarding";
 import type { StepProps } from "./step-props";
 

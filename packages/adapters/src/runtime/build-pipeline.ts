@@ -27,8 +27,12 @@ export class BuildLogger {
   constructor(private readonly onLog?: LogCallback) {}
 
   /** Emit a plain log line. */
-  log(message: string, level: LogEntry["level"] = "info"): void {
-    this.onLog?.({ timestamp: new Date().toISOString(), message, level });
+  log(
+    message: string,
+    level: LogEntry["level"] = "info",
+    meta?: Pick<LogEntry, "serviceName">,
+  ): void {
+    this.onLog?.({ timestamp: new Date().toISOString(), message, level, ...meta });
   }
 
   /** Emit a step lifecycle event (running / completed / failed / skipped). */
@@ -158,18 +162,22 @@ export async function runBuildPipeline(
       // by the runtime's preflight. Nothing to clone.
       logger.step("clone", "completed", "Local source ready");
     } else {
-      await logger.runStep("clone", `Cloning ${config.repoUrl} (branch: ${config.branch})`, async () => {
-        const cloneUrl = injectGitToken(config.repoUrl, config.gitToken);
-        if (config.commitSha) {
-          await exec(
-            `git clone --branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(env.projectDir)} && cd ${sq(env.projectDir)} && git checkout ${sq(config.commitSha)}`,
-          );
-        } else {
-          await exec(
-            `git clone --depth 1 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(env.projectDir)}`,
-          );
-        }
-      });
+      await logger.runStep(
+        "clone",
+        `Cloning ${config.repoUrl} (branch: ${config.branch})`,
+        async () => {
+          const cloneUrl = injectGitToken(config.repoUrl, config.gitToken);
+          if (config.commitSha) {
+            await exec(
+              `GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone --branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(env.projectDir)} && cd ${sq(env.projectDir)} && git -c credential.helper= checkout ${sq(config.commitSha)}`,
+            );
+          } else {
+            await exec(
+              `GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone --depth 1 --branch ${sq(config.branch)} ${sq(cloneUrl)} ${sq(env.projectDir)}`,
+            );
+          }
+        },
+      );
     }
 
     // Env prefix for install & build commands — skip when env vars are set natively
@@ -188,9 +196,13 @@ export async function runBuildPipeline(
     // ── Step 2: Install ────────────────────────────────────────────
     currentStep = "install";
     if (config.installCommand) {
-      await logger.runStep("install", `Installing dependencies (${config.packageManager})`, async () => {
-        await exec(inDir(config.installCommand));
-      });
+      await logger.runStep(
+        "install",
+        `Installing dependencies (${config.packageManager})`,
+        async () => {
+          await exec(inDir(config.installCommand));
+        },
+      );
     } else {
       logger.step("install", "skipped", "No install command configured");
     }
@@ -208,7 +220,6 @@ export async function runBuildPipeline(
     const durationMs = Date.now() - startTime;
 
     return { status: "deploying", durationMs };
-
   } catch (err) {
     const durationMs = Date.now() - startTime;
     const errorMessage = err instanceof Error ? err.message : String(err);

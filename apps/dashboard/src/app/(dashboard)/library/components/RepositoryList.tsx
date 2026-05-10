@@ -116,11 +116,17 @@ export function RepositoryList({
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                 }`}
               >
-                <img
-                  src={acc.avatar_url}
-                  alt=""
-                  className="w-5 h-5 rounded-full"
-                />
+                {acc.avatar_url ? (
+                  <img
+                    src={acc.avatar_url}
+                    alt=""
+                    className="w-5 h-5 rounded-full"
+                  />
+                ) : (
+                  <span className="flex w-5 h-5 items-center justify-center rounded-full bg-muted">
+                    <Github className="size-3" />
+                  </span>
+                )}
                 {acc.login}
               </button>
             ))}

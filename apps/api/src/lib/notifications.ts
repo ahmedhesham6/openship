@@ -15,7 +15,7 @@
  */
 
 import { sendMail, smtpEnabled } from "./mail";
-import { env } from "../config/env";
+import { runtimeTarget } from "../config/env";
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ function subjectFor(event: NotificationEvent, ctx: NotificationContext): string 
 }
 
 function htmlFor(event: NotificationEvent, ctx: NotificationContext): string {
-  const dashboardUrl = env.DASHBOARD_URL;
+  const dashboardUrl = runtimeTarget.dashboard;
   const d = ctx.data ?? {};
 
   switch (event) {

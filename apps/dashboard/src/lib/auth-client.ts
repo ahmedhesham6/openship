@@ -2,13 +2,10 @@ import { createAuthClient } from "better-auth/react";
 import { getAuthBaseUrl } from "@/lib/api/urls";
 
 /**
- * API base URL — auth requests go directly to the dedicated API server.
+ * API base URL — auth requests go directly to the selected API origin.
  *
- * Cookies on localhost are shared across ports, so the local dashboard
- * can read cookies set by the local API in both standard and SaaS dev modes.
- *
- * In production both services share a common top-level domain
- * (e.g. api.openship.io / app.openship.io with cookie domain .openship.io).
+ * Local SaaS uses localhost:4100. Public-host dev and production use
+ * api.openship.io so Better Auth can share cookies with app.openship.io.
  */
 const AUTH_BASE_URL = getAuthBaseUrl();
 

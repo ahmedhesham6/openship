@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import '@xterm/xterm/css/xterm.css';
 import { useLogStream } from "@/hooks/useSSEConnection";
 import { useDeployment } from "@/context/DeploymentContext";
+import TerminalSurface from "./TerminalSurface";
 
 interface BuildTerminalProps {
   onReady?: (terminal: any) => void;
   className?: string;
-  mockData?: boolean;
   theme?: 'light' | 'dark';
+  enableContainerStreaming?: boolean;
   // Container streaming props
   onContainerStreamStart?: () => void;
   onContainerExit?: (exitCode: number, message: string) => void;
@@ -18,14 +18,12 @@ interface BuildTerminalProps {
 const BuildTerminal: React.FC<BuildTerminalProps> = ({ 
   onReady, 
   className = "", 
-  mockData = false, 
   theme = 'light',
+  enableContainerStreaming = true,
   onContainerStreamStart,
   onContainerExit: onContainerExitProp
 }) => {
-  const terminalRef = useRef<HTMLDivElement>(null);
   const terminalInstanceRef = useRef<any>(null);
-  const isInitializedRef = useRef(false);
   const [isStreamingContainer, setIsStreamingContainer] = useState(false);
   const { canStreamContainer, state, config } = useDeployment();
   
@@ -76,8 +74,15 @@ const BuildTerminal: React.FC<BuildTerminalProps> = ({
 
   // Start container streaming
   const startContainerStreaming = useCallback(async () => {
-    if (!state.projectId || !config.options.hasServer || !canStreamContainer.current || !terminalInstanceRef.current) {
+    if (
+      !enableContainerStreaming ||
+      !state.projectId ||
+      !config.options.hasServer ||
+      !canStreamContainer.current ||
+      !terminalInstanceRef.current
+    ) {
       console.log('[BuildTerminal] Cannot start container streaming - missing requirements', {
+        enableContainerStreaming,
         projectId: !!state.projectId,
         hasServer: config.options.hasServer,
         canStream: canStreamContainer.current,
@@ -116,7 +121,7 @@ const BuildTerminal: React.FC<BuildTerminalProps> = ({
         terminalInstanceRef.current.write(' [Failed to Start Container Stream]\r\n');
       }
     }
-  }, [state.projectId, config.options.hasServer, isStreamingContainer, logStream, onContainerStreamStart]);
+  }, [enableContainerStreaming, state.projectId, config.options.hasServer, isStreamingContainer, logStream, onContainerStreamStart]);
 
   // Effect to start container streaming when deployment succeeds
   useEffect(() => {
@@ -125,6 +130,7 @@ const BuildTerminal: React.FC<BuildTerminalProps> = ({
     
     if (
       state.deploymentSuccess && 
+      enableContainerStreaming &&
       config.options.hasServer && 
       canStream && 
       state.projectId && 
@@ -142,7 +148,7 @@ const BuildTerminal: React.FC<BuildTerminalProps> = ({
       
       return () => clearTimeout(timeoutId);
     }
-  }, [state.deploymentSuccess, config.options.hasServer, state.projectId, isStreamingContainer]);
+  }, [enableContainerStreaming, state.deploymentSuccess, config.options.hasServer, state.projectId, isStreamingContainer]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -159,200 +165,14 @@ const BuildTerminal: React.FC<BuildTerminalProps> = ({
     };
   }, [isStreamingContainer, logStream]);
 
-  const initializeTerminal = async () => {
-    if (isInitializedRef.current) return;
-    isInitializedRef.current = true;
-    const { Terminal } = await import('@xterm/xterm');
-    const { FitAddon } = await import('@xterm/addon-fit');
-    const { WebLinksAddon } = await import('@xterm/addon-web-links');
-
-    try {
-      // Create terminal instance with minimal, clean config
-      const lightTheme = {
-        background: '#ffffff',
-        foreground: '#1a1a1a',
-        cursor: '#000000',
-        cursorAccent: '#ffffff',
-        selectionBackground: '#d1d5da',
-        black: '#1a1a1a',
-        red: '#d73a49',
-        green: '#22863a',
-        yellow: '#b08800',
-        blue: '#0366d6',
-        magenta: '#6f42c1',
-        cyan: '#1b7c83',
-        white: '#6a737d',
-        brightBlack: '#959da5',
-        brightRed: '#cb2431',
-        brightGreen: '#22863a',
-        brightYellow: '#dbab09',
-        brightBlue: '#0366d6',
-        brightMagenta: '#6f42c1',
-        brightCyan: '#1b7c83',
-        brightWhite: '#1a1a1a',
-      };
-
-      const darkTheme = {
-        background: '#000000',
-        foreground: '#cccccc',
-        cursor: '#ffffff',
-        black: '#000000',
-        red: '#cd3131',
-        green: '#0dbc79',
-        yellow: '#e5e510',
-        blue: '#2472c8',
-        magenta: '#bc3fbc',
-        cyan: '#11a8cd',
-        white: '#e5e5e5',
-        brightBlack: '#666666',
-        brightRed: '#f14c4c',
-        brightGreen: '#23d18b',
-        brightYellow: '#f5f543',
-        brightBlue: '#3b8eea',
-        brightMagenta: '#d670d6',
-        brightCyan: '#29b8db',
-        brightWhite: '#e5e5e5',
-      };
-
-      const terminal = new Terminal({
-        fontFamily: 'Consolas, monospace',
-        fontSize: 14,
-        lineHeight: 1.0,
-        letterSpacing: 0,
-        theme: theme === 'light' ? lightTheme : darkTheme,
-        cursorBlink: true,
-        scrollback: 1000,
-        convertEol: true,
-      });
-
-      // Add fit addon
-      const fitAddon = new FitAddon();
-      terminal.loadAddon(fitAddon);
-      terminal.loadAddon(new WebLinksAddon());
-
-      // Open terminal in the container
-      if (!terminalRef.current) return;
-
-      terminal.open(terminalRef.current);
-      terminalInstanceRef.current = terminal;
-
-      const containerElement = terminalRef.current;
-
-      // Fit terminal to container
-      setTimeout(() => {
-        try {
-          fitAddon.fit();
-        } catch (e) {
-          console.error('Error fitting terminal:', e);
-        }
-      }, 100);
-
-      // Handle resize
-      const handleResize = () => {
-        try {
-          fitAddon.fit();
-          terminal.scrollToBottom();
-        } catch (e) {
-          console.error('Error resizing terminal:', e);
-        }
-      };
-
-      const resizeObserver = new ResizeObserver(handleResize);
-      resizeObserver.observe(containerElement);
-      window.addEventListener('resize', handleResize);
-
-      // Call onReady callback
-      if (onReady) {
-        onReady(terminal);
-      }
-
-      // Add mock data if enabled
-      if (mockData) {
-        setTimeout(() => {
-          terminal.writeln(' Starting build process...');
-          terminal.writeln('');
-          terminal.writeln('---PHASE: clone---\r\n');
-          terminal.writeln('Cloning repository...');
-          terminal.writeln('\x1b[32mCloning into \'.\'\x1b[0m');
-          terminal.writeln('');
-          terminal.writeln('---PHASE: install---\r\n');
-          terminal.writeln('npm notice');
-          terminal.writeln('npm notice New major version of npm available! 9.6.7 -> 10.9.2');
-          terminal.writeln('npm notice Run bun install -g npm@10.9.2 to update!');
-          terminal.writeln('npm notice');
-          terminal.writeln('');
-          terminal.writeln('added 352 packages in 12s');
-          terminal.writeln('');
-          terminal.writeln('---PHASE: build---\r\n');
-          terminal.writeln('> next build');
-          terminal.writeln('');
-          terminal.writeln('  Next.js 15.3.2');
-          terminal.writeln('');
-          terminal.writeln('  Creating an optimized production build ...');
-          terminal.writeln('  \x1b[32m✓\x1b[0m Compiled successfully in 2000ms');
-          terminal.writeln('  \x1b[32m✓\x1b[0m Linting and checking validity of types');
-          terminal.writeln('  \x1b[32m✓\x1b[0m Collecting page data');
-          terminal.writeln('  \x1b[32m✓\x1b[0m Generating static pages (5/5)');
-          terminal.writeln('  \x1b[32m✓\x1b[0m Collecting build traces');
-          terminal.writeln('  \x1b[32m✓\x1b[0m Finalizing page optimization');
-          terminal.writeln('');
-          terminal.writeln('\x1b[1;32m✓ Build completed successfully!\x1b[0m');
-        }, 500);
-      }
-
-      // Cleanup on unmount
-      return () => {
-        resizeObserver.disconnect();
-        window.removeEventListener('resize', handleResize);
-        terminal.dispose();
-        terminalInstanceRef.current = null;
-      };
-    } catch (error) {
-      console.error('Error initializing terminal:', error);
-    }
-  };
-
-  useEffect(() => {
-    if (!terminalRef.current || terminalInstanceRef.current || isInitializedRef.current) return;
-    initializeTerminal();
-  }, [onReady, mockData, theme]);
-
-  // Update terminal theme when theme prop changes
-  useEffect(() => {
-    const term = terminalInstanceRef.current;
-    if (!term) return;
-    const lightTheme = {
-      background: '#ffffff',
-      foreground: '#1a1a1a',
-      cursor: '#000000',
-      cursorAccent: '#ffffff',
-      selectionBackground: '#d1d5da',
-    };
-    const darkTheme = {
-      background: '#000000',
-      foreground: '#cccccc',
-      cursor: '#ffffff',
-      selectionBackground: '#444444',
-    };
-    term.options.theme = theme === 'light' ? lightTheme : darkTheme;
-  }, [theme]);
-
   return (
-    <div
-      ref={terminalRef}
-      className={`terminal-container w-full h-full ${className}`}
-      style={{
-        height: "100%",
-        width: "100%",
-        overflow: "hidden",
-        padding: "8px",
-        fontSmooth: "antialiased",
-        WebkitFontSmoothing: "antialiased",
-        MozOsxFontSmoothing: "grayscale"
-      }}
+    <TerminalSurface
+      terminalRef={terminalInstanceRef}
+      onReady={onReady}
+      className={className}
+      theme={theme}
     />
   );
 };
 
 export default BuildTerminal;
-

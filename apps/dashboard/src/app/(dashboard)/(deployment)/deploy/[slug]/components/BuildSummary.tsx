@@ -18,6 +18,20 @@ const BuildSummary: React.FC = () => {
 
   const services = config.services || [];
   const exposedServices = services.filter((s) => s.exposed);
+  const buildLocation = config.deployTarget === "cloud"
+    ? {
+        label: "Openship Cloud",
+        icon: <Cloud className="size-3.5 text-muted-foreground" />,
+      }
+    : config.buildStrategy === "local"
+      ? {
+          label: "Local Machine",
+          icon: <Monitor className="size-3.5 text-muted-foreground" />,
+        }
+      : {
+          label: "Server",
+          icon: <Cloud className="size-3.5 text-muted-foreground" />,
+        };
   const appDetailItems = [
     {
       label: "Framework",
@@ -88,16 +102,12 @@ const BuildSummary: React.FC = () => {
         {isApp && config.options.hasBuild && (
           <div className="flex items-center gap-2.5">
             <div className="w-7 h-7 rounded-md bg-muted/60 flex items-center justify-center">
-              {config.buildStrategy === "local" ? (
-                <Monitor className="size-3.5 text-muted-foreground" />
-              ) : (
-                <Cloud className="size-3.5 text-muted-foreground" />
-              )}
+              {buildLocation.icon}
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Build Location</p>
               <p className="text-sm font-medium text-foreground">
-                {config.buildStrategy === "local" ? "Local Machine" : "Server"}
+                {buildLocation.label}
               </p>
             </div>
           </div>

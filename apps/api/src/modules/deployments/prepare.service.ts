@@ -135,6 +135,16 @@ async function resolveFromGitHub(
     }
   }
 
+  let composeEnvContent: string | undefined;
+  try {
+    const envFile = await githubService.getFileContent(userId, owner, repo, ".env", {
+      branch: selectedBranch,
+    });
+    composeEnvContent = envFile?.content;
+  } catch {
+    // No project .env file committed — compose defaults still apply.
+  }
+
   // Read manifest files for deep stack detection
   const manifests: Record<string, string> = {};
   const manifestReads = MANIFEST_FILES
@@ -149,7 +159,7 @@ async function resolveFromGitHub(
     });
   await Promise.all(manifestReads);
 
-  return toProjectInfo(repository, files, packageJson, composeContent, manifests, selectedBranch);
+  return toProjectInfo(repository, files, packageJson, composeContent, manifests, selectedBranch, composeEnvContent);
 }
 
 // ─── Local filesystem ────────────────────────────────────────────────────────
@@ -186,6 +196,13 @@ async function resolveFromLocal(dirPath: string): Promise<ProjectInfo> {
     }
   }
 
+  let composeEnvContent: string | undefined;
+  try {
+    composeEnvContent = await readFile(`${dirPath}/.env`, "utf-8");
+  } catch {
+    // No project .env file — compose defaults still apply.
+  }
+
   // Read manifest files for deep stack detection
   const manifests: Record<string, string> = {};
   await Promise.all(
@@ -206,7 +223,7 @@ async function resolveFromLocal(dirPath: string): Promise<ProjectInfo> {
     default_branch: "main",
   } as const;
 
-  return toProjectInfo(repoShape, files, packageJson, composeContent, manifests, repoShape.default_branch);
+  return toProjectInfo(repoShape, files, packageJson, composeContent, manifests, repoShape.default_branch, composeEnvContent);
 }
 
 // ─── Shared mapper ───────────────────────────────────────────────────────────
@@ -228,6 +245,7 @@ function toProjectInfo(
   composeContent?: string,
   fileContents?: Record<string, string>,
   selectedBranch?: string,
+  composeEnvContent?: string,
 ): ProjectInfo {
   const stack = detectStack(files, packageJson, fileContents);
 
@@ -235,7 +253,7 @@ function toProjectInfo(
   let services: ComposeService[] | undefined;
   if (composeContent && stack.projectType === "services") {
     try {
-      const parsed = parseComposeFile(composeContent);
+      const parsed = parseComposeFile(composeContent, { envFileContent: composeEnvContent });
       services = parsed.services;
     } catch {
       // Invalid YAML — continue without services

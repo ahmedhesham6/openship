@@ -25,7 +25,7 @@ import { deployLuaScripts } from "@repo/adapters";
 import { getOpenRestyPaths } from "@/lib/openresty-paths";
 import * as domainService from "../domains/domain.service";
 import { sshManager } from "../../lib/ssh-manager";
-import { env, internalApiUrl } from "../../config";
+import { env, internalApiUrl, runtimeTarget } from "../../config";
 import { resolveProjectTrafficSource, fetchMgmt, mgmtStream } from "../../lib/project-analytics";
 import { refreshProjectFaviconIfStale } from "../../lib/favicon-detector";
 import { getAdminOblienClient } from "../../lib/oblien-user-client";
@@ -832,7 +832,7 @@ async function ensureSharedWebhook(
   webhookUrl?: string,
 ) {
   const existingHookId = project.webhookId ?? (await findSharedWebhookId(userId, owner, repo));
-  const targetWebhookUrl = webhookUrl ?? `${env.BETTER_AUTH_URL}/api/webhooks/github`;
+  const targetWebhookUrl = webhookUrl ?? `${runtimeTarget.api}/api/webhooks/github`;
   const result = await registerWebhook(userId, owner, repo, targetWebhookUrl);
   if (!result.hookId) return null;
 

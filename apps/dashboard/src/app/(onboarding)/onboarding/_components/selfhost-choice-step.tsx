@@ -1,6 +1,6 @@
 "use client";
 
-import { LOCAL_API_URL, LOCAL_DASHBOARD_URL } from "@repo/onboarding";
+import { LOCAL_API_URL, LOCAL_DASHBOARD_URL } from "@repo/core";
 import type { StepProps } from "./step-props";
 
 /* ── Inline SVGs matching old design ── */

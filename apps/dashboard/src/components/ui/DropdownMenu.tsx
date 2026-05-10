@@ -61,8 +61,8 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({
         };
       default:
         return {
-          color: "#1f2937",
-          hoverBg: "rgba(0, 0, 0, 0.04)",
+          color: "hsl(var(--foreground))",
+          hoverBg: "hsl(var(--muted))",
         };
     }
   };
@@ -110,8 +110,6 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({
               }
 
               const styles = getVariantStyles(action.variant);
-              const iconString = typeof action.icon === 'string' ? action.icon : undefined;
-
               return (
                 <React.Fragment key={action.id}>
                   <button

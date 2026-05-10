@@ -17,6 +17,7 @@ export interface ComposeService {
   ports: string[];
   dependsOn: string[];
   environment: Record<string, string>;
+  environmentMeta?: Record<string, ComposeEnvironmentMeta>;
   volumes: string[];
   command?: string;
   restart?: string;
@@ -33,34 +34,52 @@ export interface ComposeParseResult {
   networks: string[];
 }
 
+export interface ComposeEnvironmentMeta {
+  source: "env-file" | "default" | "missing" | "interpolated";
+  variable?: string;
+  defaultValue?: string;
+  resolvedValue: string;
+  expression?: string;
+}
+
+export interface ComposeParseOptions {
+  /** Contents of project .env files used for Docker Compose interpolation. */
+  envFileContent?: string | string[];
+  /** Explicit interpolation values. Overrides values loaded from envFileContent. */
+  env?: Record<string, string>;
+}
+
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
-export function parseComposeFile(content: string): ComposeParseResult {
+export function parseComposeFile(content: string, options: ComposeParseOptions = {}): ComposeParseResult {
   const doc = parseYaml(content);
 
   if (!doc || typeof doc !== "object") {
     return { services: [], volumes: [], networks: [] };
   }
 
+  const interpolationEnv = buildInterpolationEnv(options);
   const rawServices = doc.services ?? {};
   const services: ComposeService[] = [];
 
   for (const [name, def] of Object.entries(rawServices)) {
     if (!def || typeof def !== "object") continue;
     const svc = def as Record<string, unknown>;
-    const build = parseBuild(svc.build);
+    const build = parseBuild(svc.build, interpolationEnv);
+    const environment = parseEnvironment(svc.environment, interpolationEnv);
 
     services.push({
       name,
-      image: typeof svc.image === "string" ? svc.image : undefined,
+      image: typeof svc.image === "string" ? interpolateComposeString(svc.image, interpolationEnv) : undefined,
       build: build.context,
       dockerfile: build.dockerfile,
-      ports: parsePorts(svc.ports),
+      ports: parsePorts(svc.ports, interpolationEnv),
       dependsOn: parseDependsOn(svc.depends_on),
-      environment: parseEnvironment(svc.environment),
-      volumes: parseVolumes(svc.volumes),
-      command: parseCommand(svc.command),
-      restart: typeof svc.restart === "string" ? svc.restart : undefined,
+      environment: environment.values,
+      ...(Object.keys(environment.metadata).length > 0 && { environmentMeta: environment.metadata }),
+      volumes: parseVolumes(svc.volumes, interpolationEnv),
+      command: parseCommand(svc.command, interpolationEnv),
+      restart: typeof svc.restart === "string" ? interpolateComposeString(svc.restart, interpolationEnv) : undefined,
     });
   }
 
@@ -72,22 +91,22 @@ export function parseComposeFile(content: string): ComposeParseResult {
 
 // ─── Field parsers ───────────────────────────────────────────────────────────
 
-function parseBuild(build: unknown): { context?: string; dockerfile?: string } {
-  if (typeof build === "string") return { context: build };
+function parseBuild(build: unknown, env: Record<string, string>): { context?: string; dockerfile?: string } {
+  if (typeof build === "string") return { context: interpolateComposeString(build, env) };
   if (build && typeof build === "object") {
     const b = build as Record<string, unknown>;
     return {
-      context: (typeof b.context === "string" ? b.context : undefined) ?? ".",
-      dockerfile: typeof b.dockerfile === "string" ? b.dockerfile : undefined,
+      context: (typeof b.context === "string" ? interpolateComposeString(b.context, env) : undefined) ?? ".",
+      dockerfile: typeof b.dockerfile === "string" ? interpolateComposeString(b.dockerfile, env) : undefined,
     };
   }
   return {};
 }
 
-function parsePorts(ports: unknown): string[] {
+function parsePorts(ports: unknown, env: Record<string, string>): string[] {
   if (!Array.isArray(ports)) return [];
   return ports.map((p) => {
-    if (typeof p === "string") return p;
+    if (typeof p === "string") return interpolateComposeString(p, env);
     if (typeof p === "number") return String(p);
     if (p && typeof p === "object") {
       const port = p as Record<string, unknown>;
@@ -107,40 +126,61 @@ function parseDependsOn(deps: unknown): string[] {
   return [];
 }
 
-function parseEnvironment(env: unknown): Record<string, string> {
-  if (!env) return {};
+function parseEnvironment(
+  env: unknown,
+  interpolationEnv: Record<string, string>,
+): { values: Record<string, string>; metadata: Record<string, ComposeEnvironmentMeta> } {
+  if (!env) return { values: {}, metadata: {} };
 
   // Array form: ["KEY=value", "KEY2=value2"]
   if (Array.isArray(env)) {
-    const result: Record<string, string> = {};
+    const values: Record<string, string> = {};
+    const metadata: Record<string, ComposeEnvironmentMeta> = {};
     for (const item of env) {
       if (typeof item !== "string") continue;
       const eqIdx = item.indexOf("=");
       if (eqIdx > 0) {
-        result[item.slice(0, eqIdx)] = item.slice(eqIdx + 1);
+        const key = interpolateComposeString(item.slice(0, eqIdx), interpolationEnv);
+        const rawValue = item.slice(eqIdx + 1);
+        const resolved = resolveComposeValue(rawValue, interpolationEnv);
+        values[key] = resolved.value;
+        if (resolved.meta) metadata[key] = resolved.meta;
       } else {
-        result[item] = "";
+        const key = interpolateComposeString(item, interpolationEnv);
+        const resolved = resolveBareEnvironmentKey(key, interpolationEnv);
+        values[key] = resolved.value;
+        if (resolved.meta) metadata[key] = resolved.meta;
       }
     }
-    return result;
+    return { values, metadata };
   }
 
   // Object form: { KEY: value }
   if (typeof env === "object") {
-    const result: Record<string, string> = {};
+    const values: Record<string, string> = {};
+    const metadata: Record<string, ComposeEnvironmentMeta> = {};
     for (const [key, val] of Object.entries(env as Record<string, unknown>)) {
-      result[key] = val != null ? String(val) : "";
+      if (val == null) {
+        const resolved = resolveBareEnvironmentKey(key, interpolationEnv);
+        values[key] = resolved.value;
+        if (resolved.meta) metadata[key] = resolved.meta;
+        continue;
+      }
+
+      const resolved = resolveComposeValue(String(val), interpolationEnv);
+      values[key] = resolved.value;
+      if (resolved.meta) metadata[key] = resolved.meta;
     }
-    return result;
+    return { values, metadata };
   }
 
-  return {};
+  return { values: {}, metadata: {} };
 }
 
-function parseVolumes(vols: unknown): string[] {
+function parseVolumes(vols: unknown, env: Record<string, string>): string[] {
   if (!Array.isArray(vols)) return [];
   return vols.map((v) => {
-    if (typeof v === "string") return v;
+    if (typeof v === "string") return interpolateComposeString(v, env);
     if (v && typeof v === "object") {
       const vol = v as Record<string, unknown>;
       const src = vol.source ?? vol.name;
@@ -152,10 +192,209 @@ function parseVolumes(vols: unknown): string[] {
   });
 }
 
-function parseCommand(command: unknown): string | undefined {
-  if (typeof command === "string") return command;
+function parseCommand(command: unknown, env: Record<string, string>): string | undefined {
+  if (typeof command === "string") return interpolateComposeString(command, env);
   if (Array.isArray(command)) {
-    return command.map((part) => String(part)).join(" ");
+    return command.map((part) => interpolateComposeString(String(part), env)).join(" ");
   }
   return undefined;
+}
+
+// ─── Docker Compose interpolation ────────────────────────────────────────────
+
+function buildInterpolationEnv(options: ComposeParseOptions): Record<string, string> {
+  const env: Record<string, string> = {};
+  const contents = Array.isArray(options.envFileContent)
+    ? options.envFileContent
+    : options.envFileContent
+      ? [options.envFileContent]
+      : [];
+
+  for (const content of contents) {
+    Object.assign(env, parseEnvFile(content));
+  }
+
+  return { ...env, ...(options.env ?? {}) };
+}
+
+function parseEnvFile(content: string): Record<string, string> {
+  const result: Record<string, string> = {};
+
+  for (const rawLine of content.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) line = line.slice("export ".length).trimStart();
+
+    const eqIdx = line.indexOf("=");
+    if (eqIdx <= 0) continue;
+
+    const key = line.slice(0, eqIdx).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+
+    result[key] = parseEnvValue(line.slice(eqIdx + 1));
+  }
+
+  for (const [key, value] of Object.entries(result)) {
+    result[key] = interpolateComposeString(value, result);
+  }
+
+  return result;
+}
+
+function parseEnvValue(rawValue: string): string {
+  const value = rawValue.trimStart();
+  if (!value) return "";
+
+  if (value.startsWith('"')) {
+    const end = findClosingQuote(value, '"');
+    const quoted = end >= 0 ? value.slice(1, end) : value.slice(1);
+    return quoted
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\");
+  }
+
+  if (value.startsWith("'")) {
+    const end = findClosingQuote(value, "'");
+    return end >= 0 ? value.slice(1, end) : value.slice(1);
+  }
+
+  const commentMatch = value.match(/\s+#/);
+  return (commentMatch?.index === undefined ? value : value.slice(0, commentMatch.index)).trimEnd();
+}
+
+function findClosingQuote(value: string, quote: '"' | "'"): number {
+  for (let i = 1; i < value.length; i++) {
+    if (value[i] === quote && value[i - 1] !== "\\") return i;
+  }
+  return -1;
+}
+
+function interpolateComposeString(input: string, env: Record<string, string>): string {
+  const escapedDollar = "\0COMPOSE_ESCAPED_DOLLAR\0";
+  const protectedInput = input.replace(/\$\$/g, escapedDollar);
+
+  const withBraced = protectedInput.replace(/\$\{([^}]+)\}/g, (_match, expression: string) =>
+    resolveInterpolationExpression(expression, env).value,
+  );
+
+  return withBraced
+    .replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_match, key: string) => env[key] ?? "")
+    .replaceAll(escapedDollar, "$");
+}
+
+function resolveComposeValue(
+  input: string,
+  env: Record<string, string>,
+): { value: string; meta?: ComposeEnvironmentMeta } {
+  const trimmed = input.trim();
+  const directBraced = trimmed.match(/^\$\{([^}]+)\}$/s);
+  if (directBraced) {
+    const resolved = resolveInterpolationExpression(directBraced[1]!, env);
+    return {
+      value: resolved.value,
+      meta: {
+        source: resolved.source,
+        variable: resolved.variable,
+        defaultValue: resolved.defaultValue,
+        resolvedValue: resolved.value,
+        expression: trimmed,
+      },
+    };
+  }
+
+  const directPlain = trimmed.match(/^\$([A-Za-z_][A-Za-z0-9_]*)$/);
+  if (directPlain) {
+    const key = directPlain[1]!;
+    const resolved = resolveBareEnvironmentKey(key, env);
+    return {
+      value: resolved.value,
+      meta: {
+        source: resolved.meta?.source ?? "missing",
+        variable: key,
+        resolvedValue: resolved.value,
+        expression: trimmed,
+      },
+    };
+  }
+
+  const value = interpolateComposeString(input, env);
+  if (!input.includes("$")) return { value };
+
+  return {
+    value,
+    meta: {
+      source: "interpolated",
+      resolvedValue: value,
+      expression: input,
+    },
+  };
+}
+
+function resolveBareEnvironmentKey(
+  key: string,
+  env: Record<string, string>,
+): { value: string; meta: ComposeEnvironmentMeta } {
+  const hasValue = Object.prototype.hasOwnProperty.call(env, key);
+  const value = env[key] ?? "";
+  return {
+    value,
+    meta: {
+      source: hasValue ? "env-file" : "missing",
+      variable: key,
+      resolvedValue: value,
+      expression: key,
+    },
+  };
+}
+
+function resolveInterpolationExpression(
+  expression: string,
+  env: Record<string, string>,
+): { value: string; source: ComposeEnvironmentMeta["source"]; variable?: string; defaultValue?: string } {
+  const match = expression.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-+?])(.*))?$/s);
+  if (!match) return { value: "", source: "missing" };
+
+  const [, key, operator, rawWord = ""] = match;
+  const hasValue = Object.prototype.hasOwnProperty.call(env, key);
+  const value = env[key] ?? "";
+  const isNonEmpty = hasValue && value !== "";
+  const word = () => interpolateComposeString(rawWord, env);
+
+  switch (operator) {
+    case undefined:
+      return { value: hasValue ? value : "", source: hasValue ? "env-file" : "missing", variable: key };
+    case ":-":
+      if (isNonEmpty) return { value, source: "env-file", variable: key };
+      {
+        const fallback = word();
+        return { value: fallback, source: "default", variable: key, defaultValue: fallback };
+      }
+    case "-":
+      if (hasValue) return { value, source: "env-file", variable: key };
+      {
+        const fallback = word();
+        return { value: fallback, source: "default", variable: key, defaultValue: fallback };
+      }
+    case ":?":
+      return { value: isNonEmpty ? value : "", source: isNonEmpty ? "env-file" : "missing", variable: key };
+    case "?":
+      return { value: hasValue ? value : "", source: hasValue ? "env-file" : "missing", variable: key };
+    case ":+":
+      if (!isNonEmpty) return { value: "", source: "missing", variable: key };
+      {
+        const replacement = word();
+        return { value: replacement, source: "default", variable: key, defaultValue: replacement };
+      }
+    case "+":
+      if (!hasValue) return { value: "", source: "missing", variable: key };
+      {
+        const replacement = word();
+        return { value: replacement, source: "default", variable: key, defaultValue: replacement };
+      }
+    default:
+      return { value: "", source: "missing", variable: key };
+  }
 }

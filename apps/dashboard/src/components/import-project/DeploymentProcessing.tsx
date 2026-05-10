@@ -312,7 +312,6 @@ const DeploymentProcessing: React.FC<DeploymentProcessingProps> = ({ onRedeploy 
               <div className="bg-white dark:bg-black border border-border/50 rounded-xl overflow-hidden h-[400px]">
                 <BuildTerminal
                   onReady={handleTerminalReady}
-                  mockData={false}
                   theme={resolvedTheme}
                 />
               </div>

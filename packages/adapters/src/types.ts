@@ -61,6 +61,8 @@ export interface BuildConfig {
   commitSha?: string;
   /** Absolute path to a local project directory (used instead of repoUrl for local projects) */
   localPath?: string;
+  /** Remote source prepared by the runtime, used by cloud compose builds to avoid API-host clones. */
+  sourceRef?: BuildSourceRef;
   /** Where the build runs: "server" (clone/copy to workspace) or "local" (build on host, transfer dist) */
   buildStrategy?: BuildStrategy;
   /** Detected framework / stack */
@@ -96,6 +98,12 @@ export interface BuildConfig {
   /** Ephemeral token for cloning private repos — never persisted */
   gitToken?: string;
 }
+
+export type BuildSourceRef = {
+  kind: "cloud-workspace";
+  workspaceId: string;
+  path: string;
+};
 
 export interface DeployConfig {
   /** Unique deployment id */
@@ -161,6 +169,8 @@ export interface LogEntry {
   step?: BuildStep;
   /** Step lifecycle status */
   stepStatus?: "running" | "completed" | "failed" | "skipped";
+  /** Compose service name when this log belongs to one service. */
+  serviceName?: string;
   /** Pre-encoded base64 data — passed through to SSE without re-encoding. */
   rawData?: string;
 }

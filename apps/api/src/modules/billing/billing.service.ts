@@ -6,7 +6,7 @@
 
 import Stripe from "stripe";
 import { PLANS, ANNUAL_DISCOUNT, type PlanId } from "@repo/core";
-import { env } from "../../config/env";
+import { env, runtimeTarget } from "../../config/env";
 
 /* ---------- Stripe client (lazy) ---------- */
 
@@ -63,8 +63,8 @@ export async function createCheckoutSession(
         quantity: 1,
       },
     ],
-    success_url: `${env.DASHBOARD_URL}/billing/overview?checkout=success`,
-    cancel_url: `${env.DASHBOARD_URL}/billing/plans?checkout=cancelled`,
+    success_url: `${runtimeTarget.dashboard}/billing/overview?checkout=success`,
+    cancel_url: `${runtimeTarget.dashboard}/billing/plans?checkout=cancelled`,
   });
 
   if (!session.url) {
@@ -86,7 +86,7 @@ export async function createPortalSession(
 
   const session = await stripe.billingPortal.sessions.create({
     customer: customerId,
-    return_url: `${env.DASHBOARD_URL}/billing/overview`,
+    return_url: `${runtimeTarget.dashboard}/billing/overview`,
   });
 
   return { portalUrl: session.url };

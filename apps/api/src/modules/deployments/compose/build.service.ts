@@ -12,14 +12,22 @@ import { repos, type Deployment, type Project } from "@repo/db";
 
 import { createBuildConfig, type BuildConfigSnapshotLike } from "../build-config";
 import * as sessionManager from "../session-manager";
+import {
+  buildSourceOverrides,
+  prepareComposeBuildSource,
+  type ComposeSourceRuntime,
+  type PreparedComposeSource,
+} from "./source.service";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function sanitizeComposeImageName(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "service";
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "service"
+  );
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -37,8 +45,11 @@ export interface ComposeBuildImagesResult {
 export async function buildComposeImages(opts: {
   project: Project;
   dep: Deployment;
-  runtime: {
-    build(config: BuildConfig, logger?: BuildLogger): Promise<{
+  runtime: ComposeSourceRuntime & {
+    build(
+      config: BuildConfig,
+      logger?: BuildLogger,
+    ): Promise<{
       status: string;
       imageRef?: string;
       durationMs?: number;
@@ -60,6 +71,7 @@ export async function buildComposeImages(opts: {
 
   const buildable = enabled.filter((service) => !!service.build);
   const external = enabled.filter((service) => !service.build && !!service.image);
+  let sharedSource: PreparedComposeSource | null = null;
 
   // ── Broadcast initial per-service status for ALL services ──────────
   // This seeds the UI check-list immediately so users see every service.
@@ -71,86 +83,146 @@ export async function buildComposeImages(opts: {
     });
   }
 
-  if (buildable.length > 0) {
-    opts.logger.step("build", "running", `Building ${buildable.length} compose service image${buildable.length === 1 ? "" : "s"}...`);
-  } else {
-    opts.logger.step("build", "completed", "Compose services use pre-built images — skipping build phase");
-  }
-
   for (const service of external) {
     if (service.image) {
       imageRefs.set(service.id, service.image);
     }
   }
 
-  // ── Build all services in parallel ──────────────────────────────────
-  await Promise.all(buildable.map(async (service) => {
-    const context = service.build ?? opts.snapshot.rootDirectory;
-    const dockerfileLabel = service.dockerfile ? ` using ${service.dockerfile}` : "";
-    opts.logger.log(`Building compose service "${service.name}" from ${context || "."}${dockerfileLabel}...\n`);
-
-    // Broadcast "building" so the UI shows a spinner for this service
-    sessionManager.broadcastServiceStatus(opts.dep.id, {
-      serviceName: service.name,
-      serviceId: service.id,
-      status: "building",
+  if (buildable.length > 0 && opts.runtime.prepareComposeSource) {
+    sharedSource = await prepareComposeBuildSource({
+      runtime: opts.runtime,
+      logger: opts.logger,
+      snapshot: opts.snapshot,
+      deploymentId: opts.dep.id,
+      projectId: opts.project.id,
+      projectSlug: opts.project.slug ?? "",
+      projectName: opts.project.name,
+      branch: opts.dep.branch,
+      commitSha: opts.dep.commitSha,
+      gitToken: opts.gitToken,
+      resources: opts.buildResources,
     });
+  }
 
-    // Per-service logger prefixes all output so parallel streams are readable.
-    // Inner step events are forwarded as plain log lines — the outer orchestrator
-    // owns the top-level step lifecycle.
-    const serviceLogger = new BuildLogger((entry) => {
-      opts.logger.log(`[${service.name}] ${entry.message}`, entry.level);
-    });
-
-    const buildResult = await opts.runtime.build(
-      createBuildConfig({
-        project: opts.project,
-        dep: opts.dep,
-        snapshot: opts.snapshot,
-        sessionId: `${opts.buildSessionId}-${service.id}`,
-        envVars: opts.buildEnvVars,
-        resources: opts.buildResources,
-        gitToken: opts.gitToken,
-        overrides: {
-          slug: `${sanitizeComposeImageName(opts.project.slug ?? opts.project.name)}-${sanitizeComposeImageName(service.name)}`,
-          stack: "docker",
-          rootDirectory: context,
-          dockerfilePath: service.dockerfile ?? undefined,
-          hasServer: true,
-        },
-      }),
-      serviceLogger,
+  if (buildable.length > 0) {
+    opts.logger.step(
+      "build",
+      "running",
+      `Building ${buildable.length} compose service image${buildable.length === 1 ? "" : "s"}...`,
     );
+  } else {
+    opts.logger.step(
+      "build",
+      "completed",
+      "Compose services use pre-built images — skipping build phase",
+    );
+  }
 
-    if (buildResult.status === "failed" || !buildResult.imageRef) {
-      const failureMessage = buildResult.errorMessage ?? `Failed to build service "${service.name}"`;
-      buildFailures.set(service.id, failureMessage);
-      opts.logger.log(`Compose service "${service.name}" build failed: ${failureMessage}\n`, "error");
-      sessionManager.broadcastServiceStatus(opts.dep.id, {
-        serviceName: service.name,
-        serviceId: service.id,
-        status: "failed",
-        error: failureMessage,
-      });
-      return;
-    }
+  try {
+    // ── Build all services in parallel ──────────────────────────────────
+    await Promise.all(
+      buildable.map(async (service) => {
+        const context = service.build ?? opts.snapshot.rootDirectory;
+        const dockerfileLabel = service.dockerfile ? ` using ${service.dockerfile}` : "";
+        opts.logger.log(
+          `Building compose service "${service.name}" from ${context || "."}${dockerfileLabel}...\n`,
+          "info",
+          {
+            serviceName: service.name,
+          },
+        );
 
-    imageRefs.set(service.id, buildResult.imageRef);
-    opts.logger.log(`Compose service "${service.name}" image ready: ${buildResult.imageRef}\n`);
-    sessionManager.broadcastServiceStatus(opts.dep.id, {
-      serviceName: service.name,
-      serviceId: service.id,
-      status: "built",
-    });
-  }));
+        // Broadcast "building" so the UI shows a spinner for this service
+        sessionManager.broadcastServiceStatus(opts.dep.id, {
+          serviceName: service.name,
+          serviceId: service.id,
+          status: "building",
+        });
+
+        // Per-service logger prefixes all output so parallel streams are readable.
+        // Inner step events are forwarded as plain log lines — the outer orchestrator
+        // owns the top-level step lifecycle.
+        const serviceLogger = new BuildLogger((entry) => {
+          opts.logger.log(`[${service.name}] ${entry.message}`, entry.level, {
+            serviceName: service.name,
+          });
+        });
+
+        const buildResult = await opts.runtime.build(
+          createBuildConfig({
+            project: opts.project,
+            dep: opts.dep,
+            snapshot: opts.snapshot,
+            sessionId: `${opts.buildSessionId}-${service.id}`,
+            envVars: opts.buildEnvVars,
+            resources: opts.buildResources,
+            gitToken: opts.gitToken,
+            overrides: {
+              ...buildSourceOverrides(sharedSource),
+              slug: `${sanitizeComposeImageName(opts.project.slug ?? opts.project.name)}-${sanitizeComposeImageName(service.name)}`,
+              stack: "docker",
+              rootDirectory: context,
+              dockerfilePath: service.dockerfile ?? undefined,
+              hasServer: true,
+            },
+          }),
+          serviceLogger,
+        );
+
+        if (buildResult.status === "failed" || !buildResult.imageRef) {
+          const failureMessage =
+            buildResult.errorMessage ?? `Failed to build service "${service.name}"`;
+          buildFailures.set(service.id, failureMessage);
+          opts.logger.log(
+            `Compose service "${service.name}" build failed: ${failureMessage}\n`,
+            "error",
+            {
+              serviceName: service.name,
+            },
+          );
+          sessionManager.broadcastServiceStatus(opts.dep.id, {
+            serviceName: service.name,
+            serviceId: service.id,
+            status: "failed",
+            error: failureMessage,
+          });
+          return;
+        }
+
+        imageRefs.set(service.id, buildResult.imageRef);
+        opts.logger.log(
+          `Compose service "${service.name}" image ready: ${buildResult.imageRef}\n`,
+          "info",
+          {
+            serviceName: service.name,
+          },
+        );
+        sessionManager.broadcastServiceStatus(opts.dep.id, {
+          serviceName: service.name,
+          serviceId: service.id,
+          status: "built",
+        });
+      }),
+    );
+  } finally {
+    await sharedSource?.cleanup();
+  }
 
   if (buildable.length > 0) {
     const succeeded = imageRefs.size - external.length;
     if (buildFailures.size === 0) {
-      opts.logger.step("build", "completed", `All ${succeeded} service image${succeeded === 1 ? "" : "s"} built successfully`);
+      opts.logger.step(
+        "build",
+        "completed",
+        `All ${succeeded} service image${succeeded === 1 ? "" : "s"} built successfully`,
+      );
     } else {
-      opts.logger.step("build", "completed", `Built ${succeeded}/${buildable.length} images (${buildFailures.size} failed)`);
+      opts.logger.step(
+        "build",
+        "completed",
+        `Built ${succeeded}/${buildable.length} images (${buildFailures.size} failed)`,
+      );
     }
     opts.logger.log("Compose image build phase complete. Preparing deployment phase...\n");
   }

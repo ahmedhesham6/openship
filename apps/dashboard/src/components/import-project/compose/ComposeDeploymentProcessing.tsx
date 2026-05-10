@@ -1,21 +1,23 @@
 "use client";
 
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import type { Terminal } from "@xterm/xterm";
 
-import BuildTerminal from "../BuildTerminal";
-import ServiceRow from "./ServiceRow";
 import ComposeSidebar from "./ComposeSidebar";
+import BuildTerminal from "../BuildTerminal";
 import { generateIcon } from "@/utils/icons";
 import { useRouter } from "next/navigation";
 import { useDeployment } from "@/context/DeploymentContext";
-import { useTheme } from "@/components/theme-provider";
 import { useModal } from "@/context/ModalContext";
 import { useToast } from "@/context/ToastContext";
+import { useTheme } from "@/components/theme-provider";
 import { deployApi } from "@/lib/api";
+import type { DeploymentStatus, ServiceDeployStatus } from "@/context/deployment/types";
+import type { BuildLog } from "@/utils/deploymentPhaseDetector";
 
 const warningDismissedKey = (deploymentId: string) => `compose-warning-dismissed:${deploymentId}`;
+const ANSI_ESCAPE_PATTERN = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const PROCESS_LOG_TAB = "__process__";
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
@@ -24,32 +26,53 @@ interface Props {
 }
 
 const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
-  const {
-    config,
-    state,
-    terminalRef,
-    onTerminalReady,
-    stopDeployment,
-    respondToPrompt,
-    deploymentStatus,
-  } = useDeployment();
-  const { resolvedTheme } = useTheme();
+  const { config, state, onTerminalReady, stopDeployment, respondToPrompt, deploymentStatus } =
+    useDeployment();
   const { showModal, hideModal } = useModal();
   const { showToast } = useToast();
+  const { resolvedTheme } = useTheme();
   const router = useRouter();
   const promptModalRef = React.useRef<string | null>(null);
   const warningModalRef = React.useRef<string | null>(null);
   const handledWarningDeploymentRef = React.useRef<string | null>(null);
+  const [activeLogTab, setActiveLogTab] = useState(PROCESS_LOG_TAB);
 
   const hasWarning = deploymentStatus === "ready" && !!state.warningMessage;
-  const isFinished = deploymentStatus === "ready" || deploymentStatus === "failed" || deploymentStatus === "cancelled";
+  const isFinished =
+    deploymentStatus === "ready" ||
+    deploymentStatus === "failed" ||
+    deploymentStatus === "cancelled";
   const services = state.serviceStatuses;
-  const total = services.length;
+  const logServiceNames = useMemo(() => {
+    const names = new Set<string>();
+    config.services.forEach((service) => {
+      if (service.name) names.add(service.name);
+    });
+    services.forEach((service) => {
+      if (service.serviceName) names.add(service.serviceName);
+    });
+    return Array.from(names);
+  }, [config.services, services]);
+  const total = Math.max(services.length, logServiceNames.length);
   const running = services.filter((s) => s.status === "running").length;
   const built = services.filter((s) => s.status === "built").length;
   const building = services.filter((s) => s.status === "building").length;
   const failed = services.filter((s) => s.status === "failed").length;
   const settled = running + built + failed;
+  const terminalTheme = resolvedTheme === "dark" ? "dark" : "light";
+
+  useEffect(() => {
+    onTerminalReady();
+  }, [onTerminalReady]);
+
+  useEffect(() => {
+    if (
+      activeLogTab !== PROCESS_LOG_TAB &&
+      (activeLogTab.length === 0 || !logServiceNames.includes(activeLogTab))
+    ) {
+      setActiveLogTab(PROCESS_LOG_TAB);
+    }
+  }, [activeLogTab, logServiceNames]);
 
   // ── Pipeline prompt modal ──────────────────────────────────────────────
   useEffect(() => {
@@ -70,17 +93,21 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
           <div className="flex items-center justify-end gap-3 pt-2">
             {actions.map((action) => {
               const variant = (action.variant || "secondary") as "secondary" | "danger" | "primary";
-              const styles = variant === "danger"
-                ? "bg-red-600 text-white hover:bg-red-700"
-                : variant === "primary"
-                  ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                  : "border border-border bg-muted text-foreground hover:bg-muted/80";
+              const styles =
+                variant === "danger"
+                  ? "bg-red-600 text-white hover:bg-red-700"
+                  : variant === "primary"
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                    : "border border-border bg-muted text-foreground hover:bg-muted/80";
               return (
                 <button
                   key={action.id}
                   type="button"
                   className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${styles}`}
-                  onClick={() => { hideModal(modalId); respondToPrompt(action.id); }}
+                  onClick={() => {
+                    hideModal(modalId);
+                    respondToPrompt(action.id);
+                  }}
                 >
                   {action.label}
                 </button>
@@ -95,7 +122,12 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
   }, [state.pendingPrompt, showModal, hideModal, respondToPrompt]);
 
   useEffect(() => {
-    if (deploymentStatus !== "ready" || !state.warningMessage || failed === 0 || !state.deploymentId) {
+    if (
+      deploymentStatus !== "ready" ||
+      !state.warningMessage ||
+      failed === 0 ||
+      !state.deploymentId
+    ) {
       warningModalRef.current = null;
       handledWarningDeploymentRef.current = null;
       return;
@@ -156,30 +188,34 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
     });
 
     warningModalRef.current = modalId;
-  }, [deploymentStatus, failed, hideModal, router, showModal, showToast, state.deploymentId, state.projectId, state.warningMessage, total]);
-
-  const handleTerminalReady = useCallback(
-    (terminal: Terminal) => {
-      if (terminalRef) terminalRef.current = terminal;
-      onTerminalReady();
-    },
-    [terminalRef, onTerminalReady],
-  );
+  }, [
+    deploymentStatus,
+    failed,
+    hideModal,
+    router,
+    showModal,
+    showToast,
+    state.deploymentId,
+    state.projectId,
+    state.warningMessage,
+    total,
+  ]);
 
   const handleViewDashboard = () => {
     if (state.projectId) router.push(`/projects/${state.projectId}`);
   };
 
   // ── Title ──────────────────────────────────────────────────────────────
-  const title = deploymentStatus === "cancelled"
-    ? "Deployment Cancelled"
-    : deploymentStatus === "failed"
-      ? "Deployment Failed"
-      : hasWarning
-        ? "Deployed With Warnings"
-        : deploymentStatus === "ready"
-          ? "Deployment Successful"
-          : "Deploying Services…";
+  const title =
+    deploymentStatus === "cancelled"
+      ? "Deployment Cancelled"
+      : deploymentStatus === "failed"
+        ? "Deployment Failed"
+        : hasWarning
+          ? "Deployed With Warnings"
+          : deploymentStatus === "ready"
+            ? "Deployment Successful"
+            : "Deploying Services…";
 
   return (
     <div className="min-h-screen bg-background mx-auto md:px-12">
@@ -218,7 +254,6 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main column */}
         <div className="lg:col-span-2 space-y-6">
-
           {/* Warning banner */}
           {hasWarning && (
             <div className="rounded-2xl border border-amber-500/30 bg-amber-500/8 px-5 py-4">
@@ -231,69 +266,21 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
             </div>
           )}
 
-          {/* Services section */}
-          <div className="bg-card rounded-2xl border border-border/50 p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-normal text-foreground">Services</h2>
-
-              {/* Compact inline progress */}
-              {total > 0 && (
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {running}/{total} running
-                  {building > 0 && (
-                    <span className="ml-1">· {building} building</span>
-                  )}
-                  {failed > 0 && (
-                    <span className="text-destructive ml-1">· {failed} failed</span>
-                  )}
-                </span>
-              )}
-            </div>
-
-            {/* Progress bar */}
-            {!isFinished && total > 0 && (
-              <div className="mb-4">
-                <div className="h-1 rounded-full overflow-hidden bg-border/50">
-                  <div
-                    className="h-full transition-all duration-500 bg-primary"
-                    style={{
-                      width: `${(settled / total) * 100}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Service rows */}
-            {services.length > 0 ? (
-              <div className="space-y-1.5">
-                {services.map((svc) => (
-                  <ServiceRow key={svc.serviceId} service={svc} />
-                ))}
-              </div>
-            ) : !isFinished ? (
-              <div className="flex items-center gap-3 text-sm text-muted-foreground py-6 justify-center">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Preparing services…
-              </div>
-            ) : null}
-          </div>
-
-          {/* Build Terminal */}
-          <div className="bg-card rounded-2xl border border-border/50 p-6 mb-20">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                {generateIcon("terminal-58-1658431404.png", 24, "currentColor")}
-                <h2 className="text-base font-normal text-foreground">Build Logs</h2>
-              </div>
-              {deploymentStatus === "failed" && (
-                <span className="text-sm text-muted-foreground">See logs for details</span>
-              )}
-            </div>
-            <div className="bg-white dark:bg-black border border-border/50 rounded-xl overflow-hidden h-[400px]">
-              <BuildTerminal onReady={handleTerminalReady} mockData={false} theme={resolvedTheme} />
-            </div>
-          </div>
+          <ComposeProcessPanel
+            logs={state.buildLogs}
+            serviceNames={logServiceNames}
+            services={services}
+            activeTab={activeLogTab}
+            onTabChange={setActiveLogTab}
+            deploymentStatus={deploymentStatus}
+            running={running}
+            building={building}
+            failed={failed}
+            settled={settled}
+            total={total}
+            isFinished={isFinished}
+            terminalTheme={terminalTheme}
+          />
         </div>
 
         {/* Sidebar */}
@@ -302,7 +289,7 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
 
           {/* Action button */}
           <div className="bg-card rounded-2xl border border-border/50 p-4">
-            {(deploymentStatus === "deploying" || deploymentStatus === "building") ? (
+            {deploymentStatus === "deploying" || deploymentStatus === "building" ? (
               <button
                 onClick={stopDeployment}
                 disabled={state.isStopping}
@@ -345,6 +332,358 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
 
 export default ComposeDeploymentProcessing;
 
+interface ParsedLogLine {
+  text: string;
+  type: BuildLog["type"];
+  serviceName: string | null;
+}
+
+function stripAnsi(text: string) {
+  return text.replace(ANSI_ESCAPE_PATTERN, "");
+}
+
+function textForDetection(text: string) {
+  return stripAnsi(text)
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .find((line) => line.trim().length > 0)
+    ?.trimEnd() ?? "";
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function detectServiceName(text: string, serviceNames: string[]) {
+  const prefixed = text.match(/^\[([^\]]+)\]\s*(.*)$/);
+  if (prefixed) {
+    const serviceName = prefixed[1];
+    if (serviceNames.includes(serviceName)) {
+      return serviceName;
+    }
+  }
+
+  const composed = text.match(
+    /\b(?:building|built|deploying|starting|started|stopping|creating|created|preparing|running|failed)\s+(?:compose\s+)?service\s+"([^"]+)"/i,
+  );
+  if (composed && serviceNames.includes(composed[1])) {
+    return composed[1];
+  }
+
+  for (const name of serviceNames) {
+    const servicePattern = new RegExp(`\\bservice\\s+"${escapeRegExp(name)}"\\b`, "i");
+    if (servicePattern.test(text)) {
+      return name;
+    }
+  }
+
+  return null;
+}
+
+function stripServicePrefix(text: string, serviceName: string) {
+  const prefixPattern = new RegExp(`^\\[${escapeRegExp(serviceName)}\\]\\s*`);
+  return text.replace(prefixPattern, "") || text;
+}
+
+function stripServicePrefixFromChunk(text: string, serviceName: string) {
+  const prefixPattern = new RegExp(`(^|[\\r\\n])\\[${escapeRegExp(serviceName)}\\]\\s*`, "g");
+  return text.replace(prefixPattern, "$1") || text;
+}
+
+function parseLogLines(logs: BuildLog[], serviceNames: string[]): ParsedLogLine[] {
+  return logs
+    .map((log) => {
+      const rawText = log.text;
+      const detectionText = textForDetection(rawText);
+      const structuredService =
+        log.serviceName && serviceNames.includes(log.serviceName)
+          ? {
+              serviceName: log.serviceName,
+              text: stripServicePrefixFromChunk(rawText, log.serviceName),
+            }
+          : null;
+      const detectedServiceName = structuredService?.serviceName ?? detectServiceName(detectionText, serviceNames);
+      const text = detectedServiceName
+        ? stripServicePrefixFromChunk(structuredService?.text ?? rawText, detectedServiceName)
+        : rawText;
+
+      return {
+        text,
+        serviceName: detectedServiceName,
+        type: log.type,
+      };
+    })
+    .filter((log) => log.text.trim().length > 0);
+}
+
+function statusDotClass(status?: ServiceDeployStatus["status"]) {
+  switch (status) {
+    case "running":
+      return "bg-primary";
+    case "built":
+      return "bg-muted-foreground";
+    case "building":
+    case "deploying":
+      return "bg-foreground";
+    case "failed":
+      return "bg-destructive";
+    case "pending":
+    default:
+      return "bg-muted-foreground/40";
+  }
+}
+
+function serviceTabClass(status: ServiceDeployStatus["status"] | undefined, isActive: boolean) {
+  if (status === "failed") {
+    return isActive
+      ? "border-destructive/30 bg-destructive/10 text-destructive"
+      : "border-destructive/20 bg-destructive/5 text-destructive hover:bg-destructive/10";
+  }
+  if (status === "running") {
+    return isActive
+      ? "border-primary/30 bg-primary/10 text-primary"
+      : "border-primary/20 bg-primary/5 text-primary hover:bg-primary/10";
+  }
+  if (status === "building" || status === "deploying") {
+    return isActive
+      ? "border-foreground/25 bg-foreground/10 text-foreground"
+      : "border-border/60 bg-muted/30 text-foreground hover:bg-muted/50";
+  }
+  if (status === "built") {
+    return isActive
+      ? "border-muted-foreground/30 bg-muted text-foreground"
+      : "border-border/60 bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-muted/50";
+  }
+  return isActive
+    ? "border-primary/30 bg-primary/10 text-primary"
+    : "border-border/60 bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-muted/50";
+}
+
+function ComposeProcessPanel({
+  logs,
+  serviceNames,
+  services,
+  activeTab,
+  onTabChange,
+  deploymentStatus,
+  running,
+  building,
+  failed,
+  settled,
+  total,
+  isFinished,
+  terminalTheme,
+}: {
+  logs: BuildLog[];
+  serviceNames: string[];
+  services: ServiceDeployStatus[];
+  activeTab: string;
+  onTabChange: (tab: string) => void;
+  deploymentStatus: DeploymentStatus;
+  running: number;
+  building: number;
+  failed: number;
+  settled: number;
+  total: number;
+  isFinished: boolean;
+  terminalTheme: "light" | "dark";
+}) {
+  const parsedLogs = useMemo(() => parseLogLines(logs, serviceNames), [logs, serviceNames]);
+  const serviceStatusByName = useMemo(() => {
+    const statuses = new Map<string, ServiceDeployStatus["status"]>();
+    services.forEach((service) => statuses.set(service.serviceName, service.status));
+    return statuses;
+  }, [services]);
+  const hasFinished =
+    deploymentStatus === "ready" ||
+    deploymentStatus === "failed" ||
+    deploymentStatus === "cancelled";
+  const terminalTabs = useMemo(() => {
+    const byService = new Map<string, ParsedLogLine[]>();
+    serviceNames.forEach((serviceName) => byService.set(serviceName, []));
+
+    const processLogs: ParsedLogLine[] = [];
+    parsedLogs.forEach((log) => {
+      if (!log.serviceName) {
+        processLogs.push(log);
+        return;
+      }
+      byService.get(log.serviceName)?.push(log);
+    });
+
+    return [
+      {
+        id: PROCESS_LOG_TAB,
+        label: "Process",
+        logs: processLogs,
+        emptyMessage: hasFinished
+          ? "No process logs were recorded for this deployment."
+          : "Waiting for deployment process logs...",
+      },
+      ...serviceNames.map((serviceName) => ({
+        id: serviceName,
+        label: serviceName,
+        logs: byService.get(serviceName) ?? [],
+        emptyMessage: hasFinished
+          ? `No logs were recorded for ${serviceName}.`
+          : `Waiting for ${serviceName} logs...`,
+      })),
+    ];
+  }, [hasFinished, parsedLogs, serviceNames]);
+
+  return (
+    <div className="bg-card rounded-2xl border border-border/50 p-6 mb-20">
+      <div className="flex flex-col gap-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            {generateIcon("terminal-58-1658431404.png", 24, "currentColor")}
+            <h2 className="text-base font-normal text-foreground">Deployment Logs</h2>
+          </div>
+          {total > 0 && (
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {running}/{total} running
+              {building > 0 && <span className="ml-1">· {building} building</span>}
+              {failed > 0 && <span className="text-destructive ml-1">· {failed} failed</span>}
+            </span>
+          )}
+        </div>
+
+        {!isFinished && total > 0 && (
+          <div className="h-1 rounded-full overflow-hidden bg-border/50">
+            <div
+              className="h-full transition-all duration-500 bg-primary"
+              style={{ width: `${(settled / total) * 100}%` }}
+            />
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => onTabChange(PROCESS_LOG_TAB)}
+            className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${serviceTabClass(
+              !isFinished ? "building" : "built",
+              activeTab === PROCESS_LOG_TAB,
+            )}`}
+          >
+            {!isFinished ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass("built")}`} />
+            )}
+            Process
+          </button>
+          {serviceNames.length > 0 ? (
+            serviceNames.map((serviceName) => {
+              const status = serviceStatusByName.get(serviceName);
+              const isActive = activeTab === serviceName;
+              return (
+                <button
+                  key={serviceName}
+                  type="button"
+                  onClick={() => onTabChange(serviceName)}
+                  className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${serviceTabClass(status, isActive)}`}
+                >
+                  {status === "building" || status === "deploying" ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass(status)}`} />
+                  )}
+                  {serviceName}
+                </button>
+              );
+            })
+          ) : (
+            <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-muted/30 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Preparing services
+            </span>
+          )}
+        </div>
+
+        <div className="relative h-[420px] overflow-hidden rounded-xl border border-border/50 bg-white dark:bg-black">
+          {terminalTabs.map((tab) => (
+            <ComposeLogTerminal
+              key={tab.id}
+              logs={tab.logs}
+              active={activeTab === tab.id}
+              emptyMessage={tab.emptyMessage}
+              theme={terminalTheme}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function terminalLine(log: ParsedLogLine) {
+  const text = log.text.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
+  const hasAnsi = text.includes("\x1B");
+  const suffix = /[\r\n]/.test(log.text) ? "" : "\r\n";
+  if (hasAnsi) return `${text}${suffix}`;
+  if (log.type === "error") return `\x1b[31m${text}\x1b[0m${suffix}`;
+  if (log.type === "success") return `\x1b[32m${text}\x1b[0m${suffix}`;
+  return `${text}${suffix}`;
+}
+
+function ComposeLogTerminal({
+  logs,
+  active,
+  emptyMessage,
+  theme,
+}: {
+  logs: ParsedLogLine[];
+  active: boolean;
+  emptyMessage: string;
+  theme: "light" | "dark";
+}) {
+  const terminalRef = useRef<any | null>(null);
+  const writtenCountRef = useRef(0);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal || !ready) return;
+
+    if (logs.length < writtenCountRef.current) {
+      terminal.reset();
+      writtenCountRef.current = 0;
+    }
+
+    logs.slice(writtenCountRef.current).forEach((log) => {
+      terminal.write(terminalLine(log));
+    });
+    writtenCountRef.current = logs.length;
+    terminal.scrollToBottom();
+  }, [logs, ready]);
+
+  return (
+    <div
+      className="absolute inset-0"
+      style={{
+        visibility: active ? "visible" : "hidden",
+        pointerEvents: active ? "auto" : "none",
+      }}
+      aria-hidden={!active}
+    >
+      <BuildTerminal
+        onReady={(terminal) => {
+          terminalRef.current = terminal;
+          setReady(true);
+        }}
+        theme={theme}
+        enableContainerStreaming={false}
+      />
+      {active && logs.length === 0 && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center">
+          <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PartialSuccessModalContent({
   failed,
   total,
@@ -363,21 +702,27 @@ function PartialSuccessModalContent({
   return (
     <div className="p-6 space-y-5">
       <div className="space-y-2">
-        <h3 className="text-xl font-bold text-foreground">Deployment finished with failed services</h3>
+        <h3 className="text-xl font-bold text-foreground">
+          Deployment finished with failed services
+        </h3>
         <p className="text-sm leading-relaxed text-muted-foreground">
           {failed} of {total} services failed, but the rest of the stack was deployed successfully.
-          You can keep this deployment and fix the failed services later, or reject it and restore the previous deployment.
+          You can keep this deployment and fix the failed services later, or reject it and restore
+          the previous deployment.
         </p>
       </div>
 
       <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4 space-y-2">
-        <p className="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Warning</p>
+        <p className="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">
+          Warning
+        </p>
         <p className="text-sm text-amber-700/90 dark:text-amber-300/90">{warningMessage}</p>
       </div>
 
       <div className="rounded-xl border border-border bg-muted/40 p-4">
         <p className="text-sm text-muted-foreground">
-          Rejecting stops using this partial deployment. If a previous deployment exists, Openship restores it. Otherwise, the new partial deployment is removed.
+          Rejecting stops using this partial deployment. If a previous deployment exists, Openship
+          restores it. Otherwise, the new partial deployment is removed.
         </p>
       </div>
 

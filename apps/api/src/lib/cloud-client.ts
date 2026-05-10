@@ -12,7 +12,7 @@
 
 import { repos } from "@repo/db";
 import type { CloudPreflightData } from "./cloud-preflight";
-import { env } from "../config/env";
+import { cloudRuntimeTarget } from "../config/env";
 import { decrypt } from "./encryption";
 
 export interface CloudAccount {
@@ -52,7 +52,7 @@ async function cloudFetch(
 
   let res: Response;
   try {
-    res = await fetch(`${env.OPENSHIP_CLOUD_URL}${path}`, {
+    res = await fetch(`${cloudRuntimeTarget.api}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",

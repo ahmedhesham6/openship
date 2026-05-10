@@ -22,7 +22,7 @@ import type {
   MappedAccount,
   RepositoryDetail,
 } from "./github.types";
-import { env } from "../../config/env";
+import { env, runtimeTarget } from "../../config/env";
 
 export const GITHUB_DEPLOY_WEBHOOK_EVENTS = ["push"] as const;
 
@@ -643,11 +643,13 @@ export async function getUserHome(userId: string) {
   let repos: MappedRepository[] = [];
 
   try {
-    const installations = await getUserInstallations(userId);
+    const installations = await getUserInstallations(userId, status);
     accounts = mapAccounts(installations);
 
     if (installations.length > 0) {
-      repos = await listInstallationRepos(userId, status.login, installations[0].id);
+      const primary = installations.find((installation) => installation.account.login === status.login)
+        ?? installations[0];
+      repos = await listInstallationRepos(userId, primary.account.login, primary.id);
     }
   } catch (err) {
     // Private key not configured or installation token failed — return empty
@@ -672,7 +674,7 @@ export function getWebhookStrategy(): WebhookStrategy {
   if (getGitHubAuthMode() === "app") return "app";
 
   // For non-app modes, check if the URL is publicly reachable
-  const url = env.BETTER_AUTH_URL;
+  const url = runtimeTarget.api;
   if (isLocalUrl(url)) return "none";
   return "repo";
 }
@@ -683,7 +685,7 @@ export function getWebhookStrategy(): WebhookStrategy {
  * Priority:
  *   1. "app"    — GitHub App (cloud mode)
  *   2. "domain" — project has a webhookDomain set (direct delivery)
- *   3. "repo"   — BETTER_AUTH_URL is public
+ *   3. "repo"   — current API target is public
  *   4. "none"   — no way to receive webhooks
  */
 export async function resolveWebhookStrategy(
@@ -696,7 +698,7 @@ export async function resolveWebhookStrategy(
   // Project has a domain configured → direct webhook delivery
   if (project?.webhookDomain) return "domain";
 
-  // Public URL → repo-level webhooks at BETTER_AUTH_URL
+  // Public API target → repo-level webhooks
   if (base === "repo") return "repo";
 
   return "none";
@@ -721,7 +723,7 @@ export async function getAvailableStrategies(
   // Domain is always available if verified domains exist (handled by UI)
   available.push("domain");
 
-  if (!isLocalUrl(env.BETTER_AUTH_URL)) {
+  if (!isLocalUrl(runtimeTarget.api)) {
     available.push("repo");
   }
 
@@ -758,7 +760,7 @@ export async function registerWebhook(
   userId: string,
   owner: string,
   repo: string,
-  webhookUrl = `${env.BETTER_AUTH_URL}/api/webhooks/github`,
+  webhookUrl = `${runtimeTarget.api}/api/webhooks/github`,
 ): Promise<{ hookId: number | null; events: string[] }> {
   try {
     const result = await createWebhook(

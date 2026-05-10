@@ -15,6 +15,7 @@ export type {
   ResourceConfig,
   ContainerStatus,
   BuildStrategy,
+  BuildSourceRef,
   BuildConfig,
   DeployConfig,
   BuildResult,
@@ -30,14 +31,9 @@ export type {
   CommandExecutor,
 } from "./types";
 
-export {
-  BUILD_STEPS,
-} from "./types";
+export { BUILD_STEPS } from "./types";
 
-export {
-  DEFAULT_RESOURCE_CONFIG,
-  DEFAULT_BUILD_RESOURCE_CONFIG,
-} from "./types";
+export { DEFAULT_RESOURCE_CONFIG, DEFAULT_BUILD_RESOURCE_CONFIG } from "./types";
 
 // ─── Runtime layer ───────────────────────────────────────────────────────────
 export type {
@@ -45,6 +41,8 @@ export type {
   RuntimeCapability,
   MultiServiceRuntimeAdapter,
   MultiServiceGroupHandle,
+  ComposeSourceHandle,
+  PrepareComposeSourceConfig,
   MultiServiceDeployConfig,
   MultiServiceDeployResult,
 } from "./runtime/types";
@@ -61,17 +59,17 @@ export {
   type PromptUserFn,
   runDeployPipeline,
 } from "./runtime/deploy-pipeline";
-export { type RoutedDomainInput, type RouteRegistrationOptions, registerResolvedRoutes } from "./runtime/route-registration";
+export {
+  type RoutedDomainInput,
+  type RouteRegistrationOptions,
+  registerResolvedRoutes,
+} from "./runtime/route-registration";
 export {
   type PortOccupant,
   probeListeningPort,
   ensurePortAvailable,
 } from "./runtime/port-conflict";
-export {
-  type RuntimeMode,
-  type CreateRuntimeOptions,
-  createRuntime,
-} from "./runtime/index";
+export { type RuntimeMode, type CreateRuntimeOptions, createRuntime } from "./runtime/index";
 
 // ─── Infrastructure layer ────────────────────────────────────────────────────
 export type { RoutingProvider, SslProvider } from "./infra/types";
@@ -156,13 +154,32 @@ export type {
 } from "./toolchain";
 
 export { toolchainCatalog } from "./toolchain";
-export {
-  checkTool,
-  checkTools,
-  checkToolchain,
-  checkToolchainForStack,
-} from "./toolchain";
+export { checkTool, checkTools, checkToolchain, checkToolchainForStack } from "./toolchain";
 export { installTool, installTools } from "./toolchain";
+
+// ─── Dockerfile planning ────────────────────────────────────────────────────
+export type {
+  CompileDockerfileOptions,
+  DockerfileCommandForm,
+  DockerfileInstruction,
+  DockerfileInstructionKeyword,
+  DockerfileParseResult,
+  WorkspaceBuildPlan,
+  WorkspaceBuildStagePlan,
+  WorkspaceCommand,
+  WorkspaceCopyStep,
+  WorkspaceExposedPort,
+  WorkspacePlanDiagnostic,
+  WorkspacePlanSeverity,
+  WorkspaceRuntimePlan,
+  WorkspaceRunStep,
+  WorkspaceStageStep,
+} from "./dockerfile";
+export {
+  compileDockerfileParseResult,
+  compileDockerfileToWorkspacePlan,
+  parseDockerfile,
+} from "./dockerfile";
 
 // ─── Platform (top-level entry point) ────────────────────────────────────────
 export type { PlatformTarget, PlatformConfig, Platform } from "./platform";

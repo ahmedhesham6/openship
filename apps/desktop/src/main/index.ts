@@ -20,13 +20,15 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { randomBytes, createHash } from "node:crypto";
 import { hostname } from "node:os";
 import {
-  type SystemSettings,
-  type TunnelConfig,
-  buildSetupPayload,
   CLOUD_API_URL as DEFAULT_CLOUD_API_URL,
   CLOUD_DASHBOARD_URL as DEFAULT_CLOUD_DASHBOARD_URL,
   LOCAL_API_URL as DEFAULT_LOCAL_API_URL,
   LOCAL_DASHBOARD_URL as DEFAULT_LOCAL_DASHBOARD_URL,
+} from "@repo/core";
+import {
+  type SystemSettings,
+  type TunnelConfig,
+  buildSetupPayload,
 } from "@repo/onboarding";
 
 // ─── Persistent config ───────────────────────────────────────────────────────
@@ -151,14 +153,14 @@ async function pushInstanceSettings(
   }
 }
 
-// ─── Cloud defaults (overridable via env for development) ─────────────────────
+// ─── URL constants ───────────────────────────────────────────────────────────
 
-const CLOUD_API_URL = process.env.OPENSHIP_CLOUD_URL || DEFAULT_CLOUD_API_URL;
-const CLOUD_DASHBOARD_URL = process.env.OPENSHIP_CLOUD_DASHBOARD_URL || DEFAULT_CLOUD_DASHBOARD_URL;
+const CLOUD_API_URL = DEFAULT_CLOUD_API_URL;
+const CLOUD_DASHBOARD_URL = DEFAULT_CLOUD_DASHBOARD_URL;
 
 // Local services for desktop cloud mode (API returns authMode:"cloud", dashboard redirects externally)
-const LOCAL_API_URL = process.env.LOCAL_API_URL || DEFAULT_LOCAL_API_URL;
-const LOCAL_DASHBOARD_URL = process.env.LOCAL_DASHBOARD_URL || DEFAULT_LOCAL_DASHBOARD_URL;
+const LOCAL_API_URL = DEFAULT_LOCAL_API_URL;
+const LOCAL_DASHBOARD_URL = DEFAULT_LOCAL_DASHBOARD_URL;
 
 // ─── API readiness check ──────────────────────────────────────────────────────
 

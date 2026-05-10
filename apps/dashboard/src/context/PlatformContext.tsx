@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useCallback } from "react";
-import { CLOUD_DASHBOARD_URL } from "@repo/onboarding";
+import { CLOUD_DASHBOARD_URL } from "@repo/core";
 
 /** Default cloud domain — matches SYSTEM.DOMAINS.CLOUD_DOMAIN in @repo/core */
 const DEFAULT_CLOUD_DOMAIN = "opsh.io";

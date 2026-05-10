@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { auth, COOKIE_PREFIX } from "../../lib/auth";
-import { env } from "../../config/env";
+import { env, runtimeTarget } from "../../config/env";
 import { setSignedCookie } from "hono/cookie";
 import { internalAuth } from "../../middleware/internal-auth";
 
@@ -96,7 +96,7 @@ if (env.DEPLOY_MODE === "desktop") {
     const { getAuthMode } = await import("../../lib/auth-mode");
     const authMode = await getAuthMode();
     if (authMode !== "none") {
-      return c.redirect(`${env.DASHBOARD_URL}/login`);
+      return c.redirect(`${runtimeTarget.dashboard}/login`);
     }
 
     const { ensureLocalUser } = await import("../../lib/local-user");
@@ -113,7 +113,7 @@ if (env.DEPLOY_MODE === "desktop") {
       expires: session.expiresAt,
     });
 
-    return c.redirect(env.DASHBOARD_URL);
+    return c.redirect(runtimeTarget.dashboard);
   });
 
   /**
@@ -156,7 +156,7 @@ if (env.DEPLOY_MODE === "desktop") {
           expires: session.expiresAt,
         });
 
-        return c.redirect(env.DASHBOARD_URL);
+        return c.redirect(runtimeTarget.dashboard);
       }
 
       const validated = validateDesktopState(state);
@@ -267,7 +267,7 @@ if (env.DEPLOY_MODE === "desktop") {
       expires: result.expiresAt,
     });
 
-    return c.redirect(env.DASHBOARD_URL);
+    return c.redirect(runtimeTarget.dashboard);
   });
 }
 

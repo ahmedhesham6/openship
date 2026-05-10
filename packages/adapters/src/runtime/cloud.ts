@@ -10,24 +10,49 @@
 import { Oblien } from "oblien";
 import type { WorkspaceHandle } from "oblien";
 import type { ExecStreamEvent } from "oblien";
+import { readFile } from "node:fs/promises";
+import { join, posix } from "node:path";
 
-import type {
-  BuildConfig,
-  DeployConfig,
-  BuildResult,
-  DeploymentResult,
-  LogEntry,
-  LogCallback,
-  ContainerInfo,
-  ResourceUsage,
-  ContainerStatus,
+import {
+  DEFAULT_RESOURCE_CONFIG,
+  type BuildConfig,
+  type DeployConfig,
+  type BuildResult,
+  type DeploymentResult,
+  type LogEntry,
+  type LogCallback,
+  type ContainerInfo,
+  type ResourceUsage,
+  type ContainerStatus,
+  type ResourceConfig,
 } from "../types";
 
-import type { RuntimeAdapter, RuntimeCapability } from "./types";
-import { BuildLogger, runBuildPipeline, type BuildEnvironment } from "./build-pipeline";
+import {
+  compileDockerfileToWorkspacePlan,
+  type WorkspaceBuildPlan,
+  type WorkspaceBuildStagePlan,
+  type WorkspaceCopyStep,
+  type WorkspaceRuntimePlan,
+  type WorkspaceRunStep,
+} from "../dockerfile";
+
+import type {
+  ComposeSourceHandle,
+  MultiServiceDeployConfig,
+  MultiServiceDeployResult,
+  MultiServiceGroupHandle,
+  MultiServiceRuntimeAdapter,
+  PrepareComposeSourceConfig,
+  RuntimeCapability,
+} from "./types";
+import { BuildLogger, runBuildPipeline, sq, type BuildEnvironment } from "./build-pipeline";
+import { CloudComposeSupport, COMPOSE_SOURCE_PATH, type CloudBuiltArtifact } from "./cloud/compose";
+import { createDockerBuildContext } from "./docker-build-context";
 import { runLocalBuild } from "./local-build";
 import { transferLocalDirectory } from "./transfer";
 import { STACKS, TRANSFER_EXCLUDES, type StackId, type StackDefinition } from "@repo/core";
+
+type CloudWorkspaceRuntime = Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
 
 function now(): string {
   return new Date().toISOString();
@@ -39,13 +64,179 @@ function applyTail(entries: LogEntry[], tail?: number): LogEntry[] {
   return entries.slice(-tail);
 }
 
+function summarizeCommandOutput(output: string): string {
+  const lines = output
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const lastLine = lines.at(-1) ?? "";
+  return lastLine.length > 300 ? `${lastLine.slice(0, 297)}...` : lastLine;
+}
+
+function exposeTarget(port: number, slug?: string, domain = "opsh.io") {
+  return slug ? `port ${port} for slug "${slug}" (${slug}.${domain})` : `port ${port}`;
+}
+
+function errorMessage(err: unknown) {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function toEnvArray(env: Record<string, string>): string[] {
+  return Object.entries(env).map(([k, v]) => `${k}=${v}`);
+}
+
+function validEnvKey(key: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key);
+}
+
+function envExportPrefix(env: Record<string, string | null | undefined>): string {
+  const parts = Object.entries(env)
+    .filter(([key]) => validEnvKey(key))
+    .map(([key, value]) => `export ${key}=${sq(value ?? "")}`);
+
+  return parts.length ? `${parts.join(" && ")} && ` : "";
+}
+
+function normalizeRelativePath(value?: string): string {
+  const normalized = value
+    ?.trim()
+    .replace(/^\.\//, "")
+    .replace(/^\/+|\/+$/g, "");
+  if (!normalized || normalized === ".") return "";
+  return normalized;
+}
+
+function joinWorkspacePath(base: string, ...parts: string[]): string {
+  return posix.normalize(posix.join(base, ...parts.filter(Boolean)));
+}
+
+function resolveExplicitDockerfileCandidate(
+  rootDirectory?: string,
+  dockerfilePath?: string,
+): string {
+  const normalizedRootDirectory = normalizeRelativePath(rootDirectory);
+  const normalizedDockerfilePath = normalizeRelativePath(dockerfilePath);
+
+  if (!normalizedDockerfilePath) {
+    return "";
+  }
+
+  if (!normalizedRootDirectory) {
+    return normalizedDockerfilePath;
+  }
+
+  if (normalizedDockerfilePath.startsWith(`${normalizedRootDirectory}/`)) {
+    return normalizedDockerfilePath;
+  }
+
+  return `${normalizedRootDirectory}/${normalizedDockerfilePath}`;
+}
+
+function resolveDockerfileCandidates(
+  rootDirectory?: string,
+  explicitDockerfilePath?: string,
+): string[] {
+  const normalizedRootDirectory = normalizeRelativePath(rootDirectory);
+
+  return [
+    resolveExplicitDockerfileCandidate(rootDirectory, explicitDockerfilePath),
+    normalizedRootDirectory ? `${normalizedRootDirectory}/Dockerfile` : "Dockerfile",
+    "Dockerfile",
+  ].filter((candidate, index, values) => candidate && values.indexOf(candidate) === index);
+}
+
+function resolveVmPath(workdir: string, target: string): string {
+  if (!target || target === ".") return workdir || "/";
+  if (target.startsWith("/")) return posix.normalize(target);
+  return posix.normalize(posix.join(workdir || "/", target));
+}
+
+function hasGlob(value: string): boolean {
+  return /[*?[\]]/.test(value);
+}
+
+function sourceExpression(baseDir: string, source: string): string {
+  const normalized = source === "." ? "." : source.replace(/^\/+/, "");
+  const full = normalized === "." ? `${baseDir}/.` : `${baseDir}/${normalized}`;
+
+  if (hasGlob(normalized)) {
+    if (!/^[A-Za-z0-9_@%+=:,./*?[\]-]+$/.test(normalized)) {
+      throw new Error(`Unsafe glob source in Dockerfile COPY: ${source}`);
+    }
+    return full;
+  }
+
+  return sq(full);
+}
+
+function stageArtifactDownloadPath(source: string): string {
+  const normalized = source.trim();
+  if (!normalized || normalized === ".") {
+    return "/";
+  }
+  if (normalized.startsWith("/")) {
+    return posix.normalize(normalized);
+  }
+  return posix.normalize(`/${normalized}`);
+}
+
+function stageArtifactDirectoryName(copy: WorkspaceCopyStep, stepIndex: number): string {
+  const stageName = (copy.from ?? "stage").replace(/[^A-Za-z0-9_.-]/g, "-") || "stage";
+  return `${stageName}-${copy.line}-${stepIndex}`;
+}
+
+function normalizeStageArtifactCommand(sourceBase: string, downloadPaths: string[]): string {
+  return downloadPaths
+    .map((path) => {
+      const relativePath = path.replace(/^\/+/, "");
+      if (!relativePath) return "";
+
+      const expectedPath = posix.join(sourceBase, relativePath);
+      const fallbackPath = posix.join(sourceBase, posix.basename(relativePath));
+      if (expectedPath === fallbackPath) return "";
+
+      return [
+        `if [ ! -e ${sq(expectedPath)} ] && [ -e ${sq(fallbackPath)} ]; then`,
+        `  mkdir -p ${sq(posix.dirname(expectedPath))}`,
+        `  mv ${sq(fallbackPath)} ${sq(expectedPath)}`,
+        "fi",
+      ].join("\n");
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function substituteDockerArgs(value: string, args: Record<string, string | null>): string {
+  return value.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (match, key: string) => {
+    const replacement = args[key];
+    return replacement === undefined || replacement === null ? match : replacement;
+  });
+}
+
+type DockerfileBuildSource =
+  | {
+      kind: "local";
+      contextRoot: string;
+      dockerfile: string;
+      cleanup(): Promise<void>;
+    }
+  | {
+      kind: "workspace";
+      contextRoot: string;
+      runtime: CloudWorkspaceRuntime;
+      dockerfile: string;
+      cleanup(): Promise<void>;
+    };
+
 // ─── CloudRuntime ────────────────────────────────────────────────────────────
 
-export class CloudRuntime implements RuntimeAdapter {
+export class CloudRuntime implements MultiServiceRuntimeAdapter {
   readonly name = "cloud";
   readonly capabilities: ReadonlySet<RuntimeCapability> = new Set<RuntimeCapability>([
     "build",
     "deploy",
+    "multiServiceDeploy",
     "stop",
     "start",
     "restart",
@@ -58,9 +249,19 @@ export class CloudRuntime implements RuntimeAdapter {
   ]);
 
   private readonly client: Oblien;
+  private readonly builtArtifacts = new Map<string, CloudBuiltArtifact>();
+  private readonly compose: CloudComposeSupport;
 
   constructor(client: Oblien) {
     this.client = client;
+    this.compose = new CloudComposeSupport({
+      client,
+      builtArtifacts: this.builtArtifacts,
+      workspace: (workspaceId) => this.ws(workspaceId),
+      provisionWorkspace: (config, logger) => this.provisionWorkspace(config, logger),
+      execAndStream: (runtime, command, onLog, timeoutSeconds) =>
+        this.execAndStream(runtime, command, onLog, timeoutSeconds),
+    });
   }
 
   supports(cap: RuntimeCapability): boolean {
@@ -80,6 +281,10 @@ export class CloudRuntime implements RuntimeAdapter {
 
   async build(config: BuildConfig, logger?: BuildLogger): Promise<BuildResult> {
     const log = logger ?? new BuildLogger();
+
+    if (config.sourceRef?.kind === "cloud-workspace") {
+      return this.buildDockerfileWorkspace(config, log);
+    }
 
     // "local" = build on the API host, then upload output to cloud workspace.
     // "server" (default) = build inside the cloud workspace.
@@ -124,10 +329,7 @@ export class CloudRuntime implements RuntimeAdapter {
               );
             } else {
               // Runtime stacks — transfer everything except deps & caches
-              const excludes = [
-                ...TRANSFER_EXCLUDES,
-                ...(stackDef?.cacheDirs ?? []),
-              ];
+              const excludes = [...TRANSFER_EXCLUDES, ...(stackDef?.cacheDirs ?? [])];
               await transferLocalDirectory(
                 buildDir,
                 { kind: "cloud-runtime", runtime: rt, path: "/app" },
@@ -199,6 +401,496 @@ export class CloudRuntime implements RuntimeAdapter {
     };
   }
 
+  private async buildDockerfileWorkspace(
+    config: BuildConfig,
+    log: BuildLogger,
+  ): Promise<BuildResult> {
+    const startedAt = Date.now();
+    const createdWorkspaceIds: string[] = [];
+    let finalWorkspaceId: string | undefined;
+    let source: DockerfileBuildSource | undefined;
+
+    try {
+      log.log("Build strategy: Dockerfile plan (build in Oblien workspaces)\n");
+      source = await this.resolveDockerfileBuildSource(config);
+      const plan = compileDockerfileToWorkspacePlan(source.dockerfile, {
+        buildArgs: config.envVars,
+      });
+
+      const blocking = plan.diagnostics.filter(
+        (item) => item.severity === "error" || item.severity === "unsupported",
+      );
+      if (blocking.length > 0) {
+        throw new Error(
+          blocking
+            .map((item) => (item.line ? `line ${item.line}: ${item.message}` : item.message))
+            .join("\n"),
+        );
+      }
+
+      if (plan.stages.length === 0 || !plan.finalStage || !plan.runtime) {
+        throw new Error("Dockerfile did not produce a deployable final stage.");
+      }
+
+      const unsafe = this.getUnsupportedDockerfilePlanFeatures(plan);
+      if (unsafe.length > 0) {
+        throw new Error(unsafe.join("\n"));
+      }
+
+      for (const warning of plan.diagnostics.filter((item) => item.severity === "warning")) {
+        log.log(
+          `${warning.line ? `Dockerfile line ${warning.line}: ` : ""}${warning.message}\n`,
+          "warn",
+        );
+      }
+
+      const built = await this.executeDockerfilePlan({
+        config,
+        plan,
+        source,
+        logger: log,
+        onWorkspaceCreated: (workspaceId) => {
+          createdWorkspaceIds.push(workspaceId);
+        },
+      });
+
+      finalWorkspaceId = built.workspaceId;
+      this.builtArtifacts.set(built.workspaceId, {
+        workspaceId: built.workspaceId,
+        runtime: built.runtime,
+      });
+
+      return {
+        sessionId: config.sessionId,
+        status: "deploying",
+        imageRef: built.workspaceId,
+        durationMs: Date.now() - startedAt,
+      };
+    } catch (err) {
+      for (const workspaceId of createdWorkspaceIds) {
+        if (workspaceId === finalWorkspaceId) continue;
+        await this.ws(workspaceId)
+          .delete()
+          .catch(() => {});
+      }
+
+      const message = err instanceof Error ? err.message : String(err);
+      log.log(`Dockerfile build failed: ${message}\n`, "error");
+      return {
+        sessionId: config.sessionId,
+        status: "failed",
+        durationMs: Date.now() - startedAt,
+        errorMessage: message,
+      };
+    } finally {
+      await source?.cleanup().catch(() => {});
+    }
+  }
+
+  private async resolveDockerfileBuildSource(config: BuildConfig): Promise<DockerfileBuildSource> {
+    if (config.sourceRef?.kind === "cloud-workspace") {
+      return this.resolveWorkspaceDockerfileBuildSource(config);
+    }
+
+    const context = await createDockerBuildContext(config, { requireRepositoryDockerfile: true });
+    const dockerfilePath = join(context.contextDir, ...context.dockerfileName.split("/"));
+    const dockerfile = await readFile(dockerfilePath, "utf-8");
+    const contextRoot = join(
+      context.contextDir,
+      ...normalizeRelativePath(context.rootDirectory).split("/").filter(Boolean),
+    );
+
+    return {
+      kind: "local",
+      contextRoot,
+      dockerfile,
+      cleanup: context.cleanup,
+    };
+  }
+
+  private async resolveWorkspaceDockerfileBuildSource(
+    config: BuildConfig,
+  ): Promise<DockerfileBuildSource> {
+    const sourceRef = config.sourceRef;
+    if (!sourceRef || sourceRef.kind !== "cloud-workspace") {
+      throw new Error("Cloud Dockerfile build source is missing.");
+    }
+
+    const runtime = await this.ws(sourceRef.workspaceId).runtime();
+    const sourceRoot = sourceRef.path || COMPOSE_SOURCE_PATH;
+    const rootDirectory = normalizeRelativePath(config.rootDirectory);
+    const dockerfileName = await this.resolveWorkspaceDockerfileName(
+      runtime,
+      sourceRoot,
+      rootDirectory,
+      config.dockerfilePath,
+    );
+
+    if (!dockerfileName) {
+      const expectedDockerfile = config.dockerfilePath?.trim() || "Dockerfile";
+      throw new Error(
+        `No Dockerfile found for this build context. Expected ${expectedDockerfile}${rootDirectory ? ` under ${rootDirectory}` : ""}.`,
+      );
+    }
+
+    const dockerfilePath = joinWorkspacePath(sourceRoot, dockerfileName);
+    const file = await runtime.files.read({ filePath: dockerfilePath });
+
+    return {
+      kind: "workspace",
+      contextRoot: joinWorkspacePath(sourceRoot, rootDirectory),
+      runtime,
+      dockerfile: file.content,
+      cleanup: async () => {},
+    };
+  }
+
+  private async resolveWorkspaceDockerfileName(
+    runtime: CloudWorkspaceRuntime,
+    sourceRoot: string,
+    rootDirectory?: string,
+    explicitDockerfilePath?: string,
+  ): Promise<string | null> {
+    for (const candidate of resolveDockerfileCandidates(rootDirectory, explicitDockerfilePath)) {
+      const candidatePath = joinWorkspacePath(sourceRoot, candidate);
+      const exists = await runtime.files
+        .stat({ path: candidatePath })
+        .then((stat) => stat.type === "file")
+        .catch(() => false);
+      if (exists) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  private getUnsupportedDockerfilePlanFeatures(plan: WorkspaceBuildPlan): string[] {
+    const errors: string[] = [];
+
+    for (const stage of plan.stages) {
+      if (stage.shell && stage.shell.join("\0") !== ["/bin/sh", "-c"].join("\0")) {
+        errors.push(
+          `Dockerfile stage "${stage.name ?? stage.index}" uses SHELL ${JSON.stringify(stage.shell)}, which is not supported by cloud Dockerfile builds yet.`,
+        );
+      }
+
+      for (const run of stage.runs) {
+        const flags = Object.keys(run.flags);
+        if (flags.length > 0) {
+          errors.push(
+            `Dockerfile line ${run.line}: RUN flags (${flags.map((flag) => `--${flag}`).join(", ")}) are not supported by cloud Dockerfile builds yet.`,
+          );
+        }
+      }
+
+      for (const copy of stage.copies) {
+        if (copy.kind === "add") {
+          errors.push(
+            `Dockerfile line ${copy.line}: ADD is not supported by cloud Dockerfile builds yet. Use COPY for local files.`,
+          );
+        }
+
+        const flags = Object.keys(copy.flags).filter((flag) => flag !== "from");
+        if (flags.length > 0) {
+          errors.push(
+            `Dockerfile line ${copy.line}: ${copy.kind.toUpperCase()} flags (${flags.map((flag) => `--${flag}`).join(", ")}) are not supported by cloud Dockerfile builds yet.`,
+          );
+        }
+      }
+    }
+
+    return errors;
+  }
+
+  private async executeDockerfilePlan(opts: {
+    config: BuildConfig;
+    plan: WorkspaceBuildPlan;
+    source: DockerfileBuildSource;
+    logger: BuildLogger;
+    onWorkspaceCreated(workspaceId: string): void;
+  }): Promise<{ workspaceId: string; runtime: WorkspaceRuntimePlan }> {
+    const { config, plan, source, logger, onWorkspaceCreated } = opts;
+    const stageRefs = new Map<
+      string,
+      {
+        stage: WorkspaceBuildStagePlan;
+        workspaceId: string;
+        runtime: Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
+      }
+    >();
+    const stageWorkspaceIds: string[] = [];
+    let finalWorkspaceId: string | undefined;
+
+    try {
+      for (const stage of plan.stages) {
+        const stageName = stage.name ?? String(stage.index);
+        logger.log(`Preparing Dockerfile stage "${stageName}" from ${stage.baseImage}...\n`);
+
+        const allArgs = { ...plan.globalArgs, ...stage.args };
+        const baseImage = substituteDockerArgs(stage.baseImage, allArgs);
+        if (!baseImage || baseImage.includes("$")) {
+          throw new Error(
+            `Dockerfile stage "${stageName}" has unresolved base image "${stage.baseImage}".`,
+          );
+        }
+
+        const provisioned = await this.provisionWorkspace(
+          {
+            name: `${config.slug ?? config.projectId}-${stageName}`.slice(0, 60),
+            image: baseImage,
+            mode: "temporary",
+            resources: config.resources,
+            env: config.envVars,
+            ttl: "15m",
+          },
+          logger,
+        );
+        onWorkspaceCreated(provisioned.workspaceId);
+        stageWorkspaceIds.push(provisioned.workspaceId);
+
+        if (stage.copies.some((copy) => !copy.from)) {
+          await this.transferDockerfileContext(source, provisioned.runtime, logger);
+        }
+
+        await this.execAndStream(
+          provisioned.runtime,
+          ["sh", "-c", `mkdir -p ${sq(stage.workdir || "/")}`],
+          logger.callback,
+        );
+
+        for (const [stepIndex, step] of stage.steps.entries()) {
+          if (step.type === "copy") {
+            await this.applyDockerfileCopyStep({
+              copy: step.copy,
+              stageRefs,
+              runtime: provisioned.runtime,
+              logger,
+              stepIndex,
+            });
+          } else {
+            await this.applyDockerfileRunStep({
+              run: step.run,
+              runtime: provisioned.runtime,
+              logger,
+              env: {
+                ...config.envVars,
+                ...plan.globalArgs,
+                ...stage.args,
+                ...step.run.env,
+              },
+            });
+          }
+        }
+
+        const ref = { stage, workspaceId: provisioned.workspaceId, runtime: provisioned.runtime };
+        stageRefs.set(String(stage.index), ref);
+        if (stage.name) stageRefs.set(stage.name, ref);
+
+        if (stage === plan.finalStage) {
+          finalWorkspaceId = provisioned.workspaceId;
+        }
+      }
+
+      if (!finalWorkspaceId || !plan.runtime) {
+        throw new Error("Dockerfile final stage workspace was not created.");
+      }
+
+      for (const workspaceId of stageWorkspaceIds) {
+        if (workspaceId !== finalWorkspaceId) {
+          await this.ws(workspaceId)
+            .delete()
+            .catch(() => {});
+        }
+      }
+
+      return { workspaceId: finalWorkspaceId, runtime: plan.runtime };
+    } catch (err) {
+      for (const workspaceId of stageWorkspaceIds) {
+        await this.ws(workspaceId)
+          .delete()
+          .catch(() => {});
+      }
+      throw err;
+    }
+  }
+
+  private async transferDockerfileContext(
+    source: DockerfileBuildSource,
+    runtime: CloudWorkspaceRuntime,
+    logger: BuildLogger,
+  ): Promise<void> {
+    if (source.kind === "local") {
+      await transferLocalDirectory(
+        source.contextRoot,
+        { kind: "cloud-runtime", runtime, path: "/openship/context" },
+        logger,
+        { excludes: [...TRANSFER_EXCLUDES] },
+      );
+      return;
+    }
+
+    await this.transferWorkspaceDirectory(
+      source.runtime,
+      source.contextRoot,
+      runtime,
+      "/openship/context",
+      logger,
+    );
+  }
+
+  private async transferWorkspaceDirectory(
+    sourceRuntime: CloudWorkspaceRuntime,
+    sourcePath: string,
+    targetRuntime: CloudWorkspaceRuntime,
+    targetPath: string,
+    logger: BuildLogger,
+  ): Promise<void> {
+    const stagingPath = `${targetPath}-upload-${Date.now()}`;
+    const excludePatterns = [
+      ...TRANSFER_EXCLUDES,
+      ...(await this.readRemoteDockerignorePatterns(sourceRuntime, sourcePath)),
+    ];
+
+    logger.log(`Transferring ${sourcePath} → ${targetPath}...\n`);
+    const response = await sourceRuntime.transfer.download({
+      paths: [sourcePath],
+      excludePatterns,
+    });
+    const body = await response.arrayBuffer();
+    const result = await targetRuntime.transfer.upload({
+      body: Buffer.from(body),
+      dest: stagingPath,
+    });
+
+    if (!result.files_extracted || result.files_extracted === 0) {
+      throw new Error("Transfer produced 0 files — upload may have failed silently");
+    }
+
+    const relativeSourcePath = sourcePath.replace(/^\/+/, "");
+    const basename = posix.basename(sourcePath);
+    const candidates = [
+      joinWorkspacePath(stagingPath, relativeSourcePath),
+      joinWorkspacePath(stagingPath, basename),
+      stagingPath,
+    ];
+    const selectLines = candidates
+      .map((candidate, index) => {
+        const prefix = index === 0 ? "if" : "elif";
+        return `${prefix} [ -d ${sq(candidate)} ]; then src=${sq(candidate)}`;
+      })
+      .join("\n");
+    const command = [
+      "set -e",
+      `rm -rf ${sq(targetPath)}`,
+      `mkdir -p ${sq(targetPath)}`,
+      "src=",
+      selectLines,
+      "else",
+      `  echo "Uploaded build context was not found in ${stagingPath}" >&2`,
+      "  exit 1",
+      "fi",
+      `cp -a "$src/." ${sq(targetPath)}/`,
+      `rm -rf ${sq(stagingPath)}`,
+    ].join("\n");
+
+    await this.execAndStream(targetRuntime, ["sh", "-c", command], logger.callback);
+    logger.log(`Uploaded ${result.files_extracted} files.\n`);
+  }
+
+  private async readRemoteDockerignorePatterns(
+    runtime: CloudWorkspaceRuntime,
+    sourcePath: string,
+  ): Promise<string[]> {
+    const dockerignorePath = joinWorkspacePath(sourcePath, ".dockerignore");
+    const file = await runtime.files.read({ filePath: dockerignorePath }).catch(() => null);
+    if (!file?.content) return [];
+
+    return file.content
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+  }
+
+  private async applyDockerfileRunStep(opts: {
+    run: WorkspaceRunStep;
+    runtime: Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
+    logger: BuildLogger;
+    env: Record<string, string | null>;
+  }): Promise<void> {
+    const { run, runtime, logger, env } = opts;
+    const command = `mkdir -p ${sq(run.workdir)} && cd ${sq(run.workdir)} && ${envExportPrefix(env)}${run.command}`;
+    logger.log(`[Dockerfile] RUN ${run.command}\n`);
+    await this.execAndStream(runtime, ["sh", "-c", command], logger.callback);
+  }
+
+  private async applyDockerfileCopyStep(opts: {
+    copy: WorkspaceCopyStep;
+    stageRefs: Map<
+      string,
+      {
+        stage: WorkspaceBuildStagePlan;
+        workspaceId: string;
+        runtime: Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
+      }
+    >;
+    runtime: Awaited<ReturnType<WorkspaceHandle["runtime"]>>;
+    logger: BuildLogger;
+    stepIndex: number;
+  }): Promise<void> {
+    const { copy, stageRefs, runtime, logger, stepIndex } = opts;
+    let sourceBase = "/openship/context";
+    let sourcePaths = copy.sources;
+
+    if (copy.from) {
+      const sourceStage = stageRefs.get(copy.from);
+      if (!sourceStage) {
+        throw new Error(
+          `COPY --from=${copy.from} references an external image, current stage, later stage, or unknown stage. Cloud Dockerfile builds support --from only for previous stages in the same Dockerfile.`,
+        );
+      }
+
+      if (copy.sources.some(hasGlob)) {
+        throw new Error(
+          `COPY --from=${copy.from} uses glob sources (${copy.sources.join(", ")}), which are not supported in cloud Dockerfile stage artifact copies yet.`,
+        );
+      }
+
+      const downloadPaths = copy.sources.map(stageArtifactDownloadPath);
+      const sourceLabel = downloadPaths.join(" ");
+      logger.log(`[Dockerfile] COPY artifacts from stage "${copy.from}": ${sourceLabel}\n`);
+      const response = await sourceStage.runtime.transfer.download({ paths: downloadPaths });
+      const body = await response.arrayBuffer();
+      sourceBase = `/openship/artifacts/${stageArtifactDirectoryName(copy, stepIndex)}`;
+      sourcePaths = downloadPaths;
+      await runtime.transfer.upload({ body: Buffer.from(body), dest: sourceBase });
+
+      const normalizeCommand = normalizeStageArtifactCommand(sourceBase, downloadPaths);
+      if (normalizeCommand) {
+        await this.execAndStream(runtime, ["sh", "-c", normalizeCommand], logger.callback);
+      }
+    }
+
+    const destination = resolveVmPath(copy.workdir, copy.destination);
+    const destinationIsDir =
+      copy.sources.length > 1 ||
+      copy.destination.endsWith("/") ||
+      copy.destination === "." ||
+      copy.destination.endsWith("/.");
+    const destinationTarget = destinationIsDir ? destination : posix.dirname(destination);
+    const sourceExprs = sourcePaths.map((source) => sourceExpression(sourceBase, source));
+    const targetExpr = destinationIsDir ? sq(destination) : sq(destination);
+    const command = [
+      `mkdir -p ${sq(destinationTarget)}`,
+      `cp -a ${sourceExprs.join(" ")} ${targetExpr}`,
+    ].join(" && ");
+
+    logger.log(
+      `[Dockerfile] ${copy.kind.toUpperCase()} ${copy.sources.join(" ")} ${copy.destination}\n`,
+    );
+    await this.execAndStream(runtime, ["sh", "-c", command], logger.callback);
+  }
+
   /**
    * Provision a temporary cloud workspace for a build.
    *
@@ -210,6 +902,79 @@ export class CloudRuntime implements RuntimeAdapter {
    * Output streams to the terminal via logger so the user sees
    * progress before the numbered build steps begin.
    */
+  private async provisionWorkspace(
+    config: {
+      name: string;
+      image: string;
+      mode: "temporary" | "permanent";
+      resources: ResourceConfig;
+      env?: Record<string, string>;
+      ttl?: string;
+    },
+    logger: BuildLogger,
+  ): Promise<{ workspaceId: string; runtime: Awaited<ReturnType<WorkspaceHandle["runtime"]>> }> {
+    logger.log(`Creating workspace from image "${config.image}"...\n`);
+
+    let wsData: { id: string };
+    try {
+      wsData = await this.client.workspaces.create({
+        name: config.name,
+        image: config.image,
+        mode: config.mode,
+        config: {
+          cpus: config.resources.cpuCores,
+          memory_mb: config.resources.memoryMb,
+          disk_size_mb: config.resources.diskMb,
+          env: toEnvArray(config.env ?? {}),
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.log(`Failed to create workspace from image "${config.image}": ${message}\n`, "error");
+      throw err;
+    }
+
+    const ws = this.ws(wsData.id);
+
+    try {
+      if (config.mode === "temporary" && config.ttl) {
+        try {
+          await ws.lifecycle.makeTemporary({
+            ttl: config.ttl,
+            ttl_action: "remove",
+            remove_on_exit: true,
+          });
+        } catch {
+          // TTL failure is non-fatal — workspace will be cleaned up eventually.
+        }
+      }
+
+      logger.log("Connecting to build environment...\n");
+      let rt: Awaited<ReturnType<WorkspaceHandle["runtime"]>> | undefined;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          rt = await ws.runtime();
+          break;
+        } catch (err) {
+          if (attempt < 2) {
+            await new Promise((r) => setTimeout(r, 2000));
+          } else {
+            throw err;
+          }
+        }
+      }
+      if (!rt) throw new Error("Failed to connect to build environment");
+
+      logger.log("Build environment ready\n");
+      return { workspaceId: wsData.id, runtime: rt };
+    } catch (err) {
+      await ws.delete().catch(() => {});
+      const message = err instanceof Error ? err.message : String(err);
+      logger.log(`Failed to prepare workspace "${wsData.id}": ${message}\n`, "error");
+      throw err;
+    }
+  }
+
   private async provisionBuildWorkspace(
     config: BuildConfig,
     logger: BuildLogger,
@@ -217,28 +982,41 @@ export class CloudRuntime implements RuntimeAdapter {
     logger.log("Provisioning build environment...\n");
 
     // Create temporary workspace with build resources
-    const envArray = Object.entries(config.envVars).map(
-      ([k, v]) => `${k}=${v}`,
-    );
+    const envArray = Object.entries(config.envVars).map(([k, v]) => `${k}=${v}`);
+    logger.log(`Creating build workspace from image "${config.buildImage}"...\n`);
 
-    const wsData = await this.client.workspaces.create({
-      name: config.slug ?? `build-${config.projectId.slice(0, 20)}`,
-      image: config.buildImage,
-      mode: "temporary",
-      config: {
-        cpus: config.resources.cpuCores,
-        memory_mb: config.resources.memoryMb,
-        disk_size_mb: config.resources.diskMb,
-        env: envArray,
-      },
-    });
+    let wsData: { id: string };
+    try {
+      wsData = await this.client.workspaces.create({
+        name: config.slug ?? `build-${config.projectId.slice(0, 20)}`,
+        image: config.buildImage,
+        mode: "temporary",
+        config: {
+          cpus: config.resources.cpuCores,
+          memory_mb: config.resources.memoryMb,
+          disk_size_mb: config.resources.diskMb,
+          env: envArray,
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.log(
+        `Failed to create build workspace from image "${config.buildImage}": ${message}\n`,
+        "error",
+      );
+      throw err;
+    }
 
     const ws = this.ws(wsData.id);
 
     try {
       // Set TTL via dedicated lifecycle API (config.ttl during create is unreliable)
       try {
-        await ws.lifecycle.makeTemporary({ ttl: "15m", ttl_action: "remove", remove_on_exit: true });
+        await ws.lifecycle.makeTemporary({
+          ttl: "15m",
+          ttl_action: "remove",
+          remove_on_exit: true,
+        });
       } catch {
         // TTL failure is non-fatal — workspace will be cleaned up eventually
       }
@@ -266,6 +1044,8 @@ export class CloudRuntime implements RuntimeAdapter {
     } catch (err) {
       // Workspace was created but setup failed — clean it up
       await ws.delete().catch(() => {});
+      const message = err instanceof Error ? err.message : String(err);
+      logger.log(`Failed to prepare build workspace "${wsData.id}": ${message}\n`, "error");
       throw err;
     }
   }
@@ -294,12 +1074,15 @@ export class CloudRuntime implements RuntimeAdapter {
     }
 
     const ws = this.ws(workspaceId);
+    const log: LogCallback = onLog ?? (() => {});
 
     try {
       // 1. Make workspace permanent (it was temporary during build)
       await ws.lifecycle.makePermanent();
     } catch (err) {
-      throw new Error(`Failed to make workspace permanent: ${err instanceof Error ? err.message : err}`);
+      throw new Error(
+        `Failed to make workspace permanent: ${err instanceof Error ? err.message : err}`,
+      );
     }
 
     // TODO: temporarily disabled — testing without resource shrink
@@ -317,8 +1100,10 @@ export class CloudRuntime implements RuntimeAdapter {
     // }
 
     // 2. Prepare production directory — copy only what's needed at runtime
+    const builtArtifact = this.builtArtifacts.get(workspaceId);
     const prodPaths = config.productionPaths;
-    const workDir = prodPaths?.length ? "/app/production" : "/app";
+    const workDir =
+      builtArtifact?.runtime.workdir ?? (prodPaths?.length ? "/app/production" : "/app");
 
     if (prodPaths?.length) {
       try {
@@ -328,11 +1113,13 @@ export class CloudRuntime implements RuntimeAdapter {
         // Sanitize paths — reject anything that could escape /app/
         const safePaths = prodPaths.filter((p) => {
           const normalized = p.replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
-          return normalized.length > 0
-            && normalized !== ".."
-            && !normalized.startsWith("../")
-            && !normalized.includes("/../")
-            && !normalized.includes("\\");
+          return (
+            normalized.length > 0 &&
+            normalized !== ".." &&
+            !normalized.startsWith("../") &&
+            !normalized.includes("/../") &&
+            !normalized.includes("\\")
+          );
         });
 
         if (safePaths.length === 0) {
@@ -347,9 +1134,10 @@ export class CloudRuntime implements RuntimeAdapter {
         //   2. Move each path (skip missing with warning)
         //   3. Rename staging → production (atomic on same filesystem)
         //   4. On any error, clean up staging dir
-        const moveLines = safePaths.map((p) => {
-          const e = sq(p);
-          return `if [ -e '/app/${e}' ]; then
+        const moveLines = safePaths
+          .map((p) => {
+            const e = sq(p);
+            return `if [ -e '/app/${e}' ]; then
   d=$(dirname '${e}')
   mkdir -p "/app/.staging/$d"
   mv '/app/${e}' '/app/.staging/${e}'
@@ -357,7 +1145,8 @@ export class CloudRuntime implements RuntimeAdapter {
 else
   echo "  skip ${e} (not found)"
 fi`;
-        }).join("\n");
+          })
+          .join("\n");
 
         const script = `set -e
 cleanup() { echo "Cleaning up staging dir"; rm -rf /app/.staging; }
@@ -377,28 +1166,30 @@ fi`;
 
         await this.execAndStream(rt, ["sh", "-c", script], logCb);
       } catch (err) {
-        throw new Error(`Failed to prepare production directory: ${err instanceof Error ? err.message : err}`);
+        throw new Error(
+          `Failed to prepare production directory: ${err instanceof Error ? err.message : err}`,
+        );
       }
     }
 
     // 3. Create a workload for the application process
-    const startCommand = config.startCommand || "npm start";
-    const envArray = Object.entries(config.envVars).map(
-      ([k, v]) => `${k}=${v}`,
-    );
+    const startCommand = builtArtifact?.runtime.startCommand || config.startCommand || "npm start";
+    const envArray = toEnvArray({
+      ...(builtArtifact?.runtime.env ?? {}),
+      ...config.envVars,
+    });
 
-    const restartPolicy = config.restartPolicy === "no" ? "never" as const
-      : (config.restartPolicy ?? "always") as "always" | "on-failure" | "never";
+    const restartPolicy =
+      config.restartPolicy === "no"
+        ? ("never" as const)
+        : ((config.restartPolicy ?? "always") as "always" | "on-failure" | "never");
 
     try {
       await ws.workloads.create({
         name: "app",
         cmd: ["sh", "-c", `cd ${workDir} && ${startCommand}`],
         working_dir: workDir,
-        env: [
-          ...envArray,
-          `PORT=${config.port}`,
-        ],
+        env: [...envArray, `PORT=${config.port}`],
         restart_policy: restartPolicy,
         max_restarts: 10,
       });
@@ -422,16 +1213,34 @@ fi`;
         url = `https://${config.customDomain}`;
       } catch (err) {
         // Fall back to free subdomain if custom domain fails
-        console.error(`Failed to connect custom domain ${config.customDomain}: ${err instanceof Error ? err.message : err}`);
-        const exposeResult = await ws.publicAccess.expose({
-          port: config.port,
-          domain: "opsh.io",
-          slug: config.slug,
-        });
-        url = exposeResult.url as string | undefined;
+        console.error(
+          `Failed to connect custom domain ${config.customDomain}: ${err instanceof Error ? err.message : err}`,
+        );
+        try {
+          log({
+            timestamp: now(),
+            level: "info",
+            message: `Exposing ${exposeTarget(config.port, config.slug)}...\n`,
+          });
+          const exposeResult = await ws.publicAccess.expose({
+            port: config.port,
+            domain: "opsh.io",
+            slug: config.slug,
+          });
+          url = exposeResult.url as string | undefined;
+        } catch (exposeErr) {
+          throw new Error(
+            `Failed to expose ${exposeTarget(config.port, config.slug)} after custom domain "${config.customDomain}" failed: ${errorMessage(exposeErr)}`,
+          );
+        }
       }
     } else {
       try {
+        log({
+          timestamp: now(),
+          level: "info",
+          message: `Exposing ${exposeTarget(config.port, config.slug)}...\n`,
+        });
         const exposeResult = await ws.publicAccess.expose({
           port: config.port,
           domain: "opsh.io",
@@ -439,7 +1248,9 @@ fi`;
         });
         url = exposeResult.url as string | undefined;
       } catch (err) {
-        throw new Error(`Failed to expose port ${config.port}: ${err instanceof Error ? err.message : err}`);
+        throw new Error(
+          `Failed to expose ${exposeTarget(config.port, config.slug)}: ${errorMessage(err)}`,
+        );
       }
     }
 
@@ -461,7 +1272,9 @@ fi`;
    *
    * The "containerId" in the result is the page ID (for future updates/teardown).
    */
-  async deployStatic(config: DeployConfig & { outputDirectory: string; projectName?: string }): Promise<DeploymentResult> {
+  async deployStatic(
+    config: DeployConfig & { outputDirectory: string; projectName?: string },
+  ): Promise<DeploymentResult> {
     const workspaceId = config.imageRef;
     if (!workspaceId) {
       return { deploymentId: config.deploymentId, status: "failed" };
@@ -472,10 +1285,13 @@ fi`;
       ? config.outputDirectory
       : `/app/${config.outputDirectory}`;
 
-      console.log(`Deploying static site from workspace ${workspaceId}, output path ${outputPath}...`);
+    console.log(
+      `Deploying static site from workspace ${workspaceId}, output path ${outputPath}...`,
+    );
 
-    const slug = config.slug
-      ?? `${config.projectId.slice(0, 20)}-${config.deploymentId.slice(0, 8)}`
+    const slug =
+      config.slug ??
+      `${config.projectId.slice(0, 20)}-${config.deploymentId.slice(0, 8)}`
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, "-");
 
@@ -483,37 +1299,57 @@ fi`;
 
     if (config.customDomain) {
       // Deploy with custom domain only — no free subdomain
-      const { page: pg } = await this.client.pages.create({
-        workspace_id: workspaceId,
-        path: outputPath,
-        name: config.projectName ?? slug,
-        slug,
-      });
+      let pg: { slug: string; url?: string | null };
+      try {
+        const result = await this.client.pages.create({
+          workspace_id: workspaceId,
+          path: outputPath,
+          name: config.projectName ?? slug,
+          slug,
+        });
+        pg = result.page;
+      } catch (err) {
+        throw new Error(
+          `Failed to create static page for slug "${slug}" with custom domain "${config.customDomain}": ${errorMessage(err)}`,
+        );
+      }
 
-      await this.client.pages.connectDomain(pg.slug, {
-        domain: config.customDomain,
-      }).catch(() => {
-        // Non-fatal: page can still be accessed via slug if domain isn't verified yet
-      });
+      await this.client.pages
+        .connectDomain(pg.slug, {
+          domain: config.customDomain,
+        })
+        .catch(() => {
+          // Non-fatal: page can still be accessed via slug if domain isn't verified yet
+        });
 
       page = { ...pg, url: pg.url ?? `https://${config.customDomain}` };
     } else {
       // Deploy with free subdomain (slug.opsh.io)
-      const { page: pg } = await this.client.pages.create({
-        workspace_id: workspaceId,
-        path: outputPath,
-        name: config.projectName ?? slug,
-        slug,
-        domain: 'opsh.io',
-      });
+      let pg: { slug: string; url?: string | null };
+      try {
+        const result = await this.client.pages.create({
+          workspace_id: workspaceId,
+          path: outputPath,
+          name: config.projectName ?? slug,
+          slug,
+          domain: "opsh.io",
+        });
+        pg = result.page;
+      } catch (err) {
+        throw new Error(
+          `Failed to create static page for slug "${slug}" (${slug}.opsh.io): ${errorMessage(err)}`,
+        );
+      }
 
       page = pg;
     }
 
     // // 3. Delete the workspace — page lives independently on the edge
-    await this.ws(workspaceId).delete().catch(() => {
-      // Non-fatal: workspace has TTL and will auto-cleanup
-    });
+    await this.ws(workspaceId)
+      .delete()
+      .catch(() => {
+        // Non-fatal: workspace has TTL and will auto-cleanup
+      });
 
     return {
       deploymentId: config.deploymentId,
@@ -585,39 +1421,53 @@ fi`;
       // Each line: [timestamp] stream: message
       if (typeof raw.logs === "string") {
         const logStr = raw.logs as string;
-        return applyTail(logStr.split("\n").filter(Boolean).map((line) => {
-          // Parse "[2026-03-14T06:09:25Z] stdout: actual message"
-          const match = line.match(/^\[([^\]]+)\]\s+(stdout|stderr):\s?(.*)/);
-          if (match) {
-            return {
-              timestamp: match[1],
-              message: match[3],
-              level: match[2] === "stderr" ? "warn" as const : "info" as const,
-            };
-          }
-          return { timestamp: now(), message: line, level: "info" as const };
-        }), tail);
+        return applyTail(
+          logStr
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => {
+              // Parse "[2026-03-14T06:09:25Z] stdout: actual message"
+              const match = line.match(/^\[([^\]]+)\]\s+(stdout|stderr):\s?(.*)/);
+              if (match) {
+                return {
+                  timestamp: match[1],
+                  message: match[3],
+                  level: match[2] === "stderr" ? ("warn" as const) : ("info" as const),
+                };
+              }
+              return { timestamp: now(), message: line, level: "info" as const };
+            }),
+          tail,
+        );
       }
 
       // Fallback: array shapes
-      const lines = Array.isArray(raw.logs) ? raw.logs
-        : Array.isArray(raw.entries) ? raw.entries
-        : Array.isArray(result) ? result as unknown[]
-        : [];
+      const lines = Array.isArray(raw.logs)
+        ? raw.logs
+        : Array.isArray(raw.entries)
+          ? raw.entries
+          : Array.isArray(result)
+            ? (result as unknown[])
+            : [];
       if (lines.length === 0) return [];
 
-      return applyTail(lines.map((line: unknown) => {
-        if (typeof line === "string") {
-          return { timestamp: now(), message: line, level: "info" as const };
-        }
-        const entry = line as Record<string, unknown>;
-        const message = (entry.message as string) ?? (entry.data as string) ?? String(line);
-        return {
-          timestamp: (entry.timestamp as string) ?? now(),
-          message,
-          level: entry.stream === "stderr" ? "warn" as const : "info" as const,
-        };
-      }).filter(e => e.message), tail);
+      return applyTail(
+        lines
+          .map((line: unknown) => {
+            if (typeof line === "string") {
+              return { timestamp: now(), message: line, level: "info" as const };
+            }
+            const entry = line as Record<string, unknown>;
+            const message = (entry.message as string) ?? (entry.data as string) ?? String(line);
+            return {
+              timestamp: (entry.timestamp as string) ?? now(),
+              message,
+              level: entry.stream === "stderr" ? ("warn" as const) : ("info" as const),
+            };
+          })
+          .filter((e) => e.message),
+        tail,
+      );
     } catch {
       // Workload may not exist yet — fall back to workspace cmd logs
       const result = await this.ws(containerId).logs.get({
@@ -628,17 +1478,20 @@ fi`;
       const lines = (result as Record<string, unknown>).logs;
       if (!Array.isArray(lines)) return [];
 
-      return applyTail(lines.map((line: unknown) => {
-        if (typeof line === "string") {
-          return { timestamp: now(), message: line, level: "info" as const };
-        }
-        const entry = line as Record<string, unknown>;
-        return {
-          timestamp: (entry.timestamp as string) ?? now(),
-          message: (entry.message as string) ?? String(line),
-          level: "info" as const,
-        };
-      }), tail);
+      return applyTail(
+        lines.map((line: unknown) => {
+          if (typeof line === "string") {
+            return { timestamp: now(), message: line, level: "info" as const };
+          }
+          const entry = line as Record<string, unknown>;
+          return {
+            timestamp: (entry.timestamp as string) ?? now(),
+            message: (entry.message as string) ?? String(line),
+            level: "info" as const,
+          };
+        }),
+        tail,
+      );
     }
   }
 
@@ -707,7 +1560,9 @@ fi`;
     };
 
     void run();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }
 
   async getUsage(containerId: string): Promise<ResourceUsage> {
@@ -726,7 +1581,37 @@ fi`;
 
   async getContainerIp(containerId: string): Promise<string | null> {
     const data = await this.ws(containerId).get();
-    return (data as Record<string, unknown>).ip as string ?? null;
+    return ((data as Record<string, unknown>).ip as string) ?? null;
+  }
+
+  // ── Compose / multi-service ────────────────────────────────────────────
+
+  async ensureServiceGroup(config: {
+    deploymentId: string;
+    projectId: string;
+    slug: string;
+    resources?: ResourceConfig;
+  }): Promise<MultiServiceGroupHandle> {
+    return this.compose.ensureServiceGroup(config);
+  }
+
+  async prepareComposeSource(
+    config: PrepareComposeSourceConfig,
+    logger?: BuildLogger,
+  ): Promise<ComposeSourceHandle> {
+    return this.compose.prepareSource(config, logger);
+  }
+
+  async destroyComposeSource(handle: ComposeSourceHandle): Promise<void> {
+    await this.compose.destroySource(handle);
+  }
+
+  async deployServiceWorkload(
+    group: MultiServiceGroupHandle,
+    config: MultiServiceDeployConfig,
+    onLog?: LogCallback,
+  ): Promise<MultiServiceDeployResult> {
+    return this.compose.deployServiceWorkload(group, config, onLog);
   }
 
   // ── Account ────────────────────────────────────────────────────────────
@@ -752,7 +1637,10 @@ fi`;
    * Verify DNS records for a custom domain.
    * Uses Oblien's standalone `domain.verify()` — no workspace needed.
    */
-  async verifyDomain(domain: string, resourceId?: string): Promise<{
+  async verifyDomain(
+    domain: string,
+    resourceId?: string,
+  ): Promise<{
     verified: boolean;
     cname: boolean;
     ownership: boolean | null;
@@ -774,7 +1662,6 @@ fi`;
       },
     };
   }
-
 
   // ── Private helpers ────────────────────────────────────────────────────
 
@@ -829,7 +1716,8 @@ fi`;
 
     if (exitCode !== undefined && exitCode !== 0) {
       const output = recentOutput.join("").trim();
-      const detail = output ? `\n${output}` : "";
+      const summary = summarizeCommandOutput(output);
+      const detail = summary ? `: ${summary}` : "";
       throw new Error(`Command failed with exit code ${exitCode}${detail}`);
     }
   }

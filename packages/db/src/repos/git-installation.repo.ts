@@ -108,6 +108,18 @@ export function createGitInstallationRepo(db: Database) {
         );
     },
 
+    /** Remove installation rows by installation_id, regardless of linked OAuth account */
+    async removeByInstallationIdForProvider(installationId: number) {
+      return db
+        .delete(gitInstallation)
+        .where(
+          and(
+            eq(gitInstallation.provider, "github"),
+            eq(gitInstallation.installationId, installationId),
+          ),
+        );
+    },
+
     /** Remove all GitHub installations for a user */
     async removeAllForUser(userId: string) {
       return db

@@ -141,7 +141,7 @@ async function handleInstallationDeleted(
 
   const account = await findUserByGitHubId(senderId);
   if (!account) {
-    // Not an Openship user — nothing to clean up
+    await repos.gitInstallation.removeByInstallationIdForProvider(installationId);
     return { success: true, event: "installation", message: "No linked user — ignored" };
   }
 
@@ -160,6 +160,7 @@ async function handleInstallationSuspended(
 
   const account = await findUserByGitHubId(senderId);
   if (!account) {
+    await repos.gitInstallation.removeByInstallationIdForProvider(installationId);
     return { success: true, event: "installation", message: "No linked user — ignored" };
   }
 

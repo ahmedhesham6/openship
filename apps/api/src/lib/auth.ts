@@ -1,7 +1,7 @@
 import { betterAuth, type User } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db, getDriver, schema } from "@repo/db";
-import { env, trustedOrigins } from "../config/env";
+import { env, runtimeTarget, trustedOrigins } from "../config/env";
 import { sendMail, smtpEnabled } from "./mail";
 import { resetPasswordEmail, verifyEmailTemplate } from "./email-templates";
 
@@ -26,7 +26,7 @@ function getSharedCookieDomain() {
     return undefined;
   }
 
-  const urls = [env.BETTER_AUTH_URL, env.DASHBOARD_URL];
+  const urls = [runtimeTarget.api, runtimeTarget.dashboard];
 
   for (const value of urls) {
     try {
@@ -47,7 +47,7 @@ const useSessionCookieCache = getDriver() !== "pglite";
 
 export const auth = betterAuth({
   basePath: "/api/auth",
-  baseURL: env.BETTER_AUTH_URL,
+  baseURL: runtimeTarget.api,
 
   database: drizzleAdapter(db, {
     provider: "pg",

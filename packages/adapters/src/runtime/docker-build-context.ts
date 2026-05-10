@@ -22,10 +22,7 @@ type IgnoreMatcher = ReturnType<typeof ignore>;
 
 function getDockerContextExcludes(config: BuildConfig): Set<string> {
   const stack = STACKS[config.stack as StackId] as StackDefinition | undefined;
-  return new Set([
-    ...TRANSFER_EXCLUDES,
-    ...(stack?.cacheDirs ?? []),
-  ]);
+  return new Set([...TRANSFER_EXCLUDES, ...(stack?.cacheDirs ?? [])]);
 }
 
 function shouldCopyPath(root: string, candidate: string, excludes: Set<string>): boolean {
@@ -36,7 +33,10 @@ function shouldCopyPath(root: string, candidate: string, excludes: Set<string>):
 }
 
 function normalizeRelativePath(value?: string): string {
-  const normalized = value?.trim().replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+  const normalized = value
+    ?.trim()
+    .replace(/^\.\//, "")
+    .replace(/^\/+|\/+$/g, "");
   if (!normalized || normalized === ".") {
     return "";
   }
@@ -80,22 +80,27 @@ async function pruneContextDirectory(
 ): Promise<void> {
   const entries = await readdir(currentPath, { withFileTypes: true });
 
-  await Promise.all(entries.map(async (entry) => {
-    const absolutePath = join(currentPath, entry.name);
-    const relativePath = relative(rootPath, absolutePath);
+  await Promise.all(
+    entries.map(async (entry) => {
+      const absolutePath = join(currentPath, entry.name);
+      const relativePath = relative(rootPath, absolutePath);
 
-    if (shouldExcludeRelativePath(relativePath, excludes, dockerignoreMatcher)) {
-      await rm(absolutePath, { recursive: true, force: true });
-      return;
-    }
+      if (shouldExcludeRelativePath(relativePath, excludes, dockerignoreMatcher)) {
+        await rm(absolutePath, { recursive: true, force: true });
+        return;
+      }
 
-    if (entry.isDirectory()) {
-      await pruneContextDirectory(rootPath, absolutePath, excludes, dockerignoreMatcher);
-    }
-  }));
+      if (entry.isDirectory()) {
+        await pruneContextDirectory(rootPath, absolutePath, excludes, dockerignoreMatcher);
+      }
+    }),
+  );
 }
 
-function resolveExplicitDockerfileCandidate(rootDirectory?: string, dockerfilePath?: string): string {
+function resolveExplicitDockerfileCandidate(
+  rootDirectory?: string,
+  dockerfilePath?: string,
+): string {
   const normalizedRootDirectory = normalizeRelativePath(rootDirectory);
   const normalizedDockerfilePath = normalizeRelativePath(dockerfilePath);
 
@@ -114,7 +119,10 @@ function resolveExplicitDockerfileCandidate(rootDirectory?: string, dockerfilePa
   return `${normalizedRootDirectory}/${normalizedDockerfilePath}`;
 }
 
-function resolveDockerfileCandidates(rootDirectory?: string, explicitDockerfilePath?: string): string[] {
+function resolveDockerfileCandidates(
+  rootDirectory?: string,
+  explicitDockerfilePath?: string,
+): string[] {
   const normalizedRootDirectory = normalizeRelativePath(rootDirectory);
 
   return [
@@ -133,7 +141,9 @@ async function resolveDockerfileName(
 
   for (const candidate of candidates) {
     const candidatePath = join(contextDir, ...candidate.split("/"));
-    const exists = await access(candidatePath).then(() => true).catch(() => false);
+    const exists = await access(candidatePath)
+      .then(() => true)
+      .catch(() => false);
     if (exists) {
       return candidate;
     }
@@ -168,18 +178,37 @@ async function copyLocalSource(
 
 async function cloneGitSource(config: BuildConfig, targetPath: string): Promise<void> {
   const cloneUrl = injectGitToken(config.repoUrl, config.gitToken);
-  await execFileAsync("git", [
-    "clone",
-    "--depth",
-    config.commitSha ? "50" : "1",
-    "--branch",
-    config.branch,
-    cloneUrl,
-    targetPath,
-  ]);
+  await execFileAsync(
+    "git",
+    [
+      "-c",
+      "credential.helper=",
+      "clone",
+      "--depth",
+      config.commitSha ? "50" : "1",
+      "--branch",
+      config.branch,
+      cloneUrl,
+      targetPath,
+    ],
+    {
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ASKPASS: "true",
+      },
+    },
+  );
 
   if (config.commitSha) {
-    await execFileAsync("git", ["-C", targetPath, "checkout", config.commitSha]);
+    await execFileAsync("git", [
+      "-c",
+      "credential.helper=",
+      "-C",
+      targetPath,
+      "checkout",
+      config.commitSha,
+    ]);
   }
 
   await rm(join(targetPath, ".git"), { recursive: true, force: true });

@@ -1,8 +1,4 @@
-import {
-  CLOUD_API_URL,
-  CLOUD_DASHBOARD_URL,
-  DASHBOARD_RUNTIME_TARGETS,
-} from "@repo/onboarding";
+import { DASHBOARD_RUNTIME_TARGETS } from "@repo/core";
 
 type RuntimeTarget = (typeof DASHBOARD_RUNTIME_TARGETS)[number];
 
@@ -78,6 +74,7 @@ const KNOWN_RUNTIME_TARGETS = DASHBOARD_RUNTIME_TARGETS.map((target) => ({
   apiOrigin: normalizeApiOrigin(target.api, `api target ${target.id}`)!,
   apiSiteOrigin: normalizeOrigin(target.api, `api site target ${target.id}`)!,
 }));
+type KnownRuntimeTarget = (typeof KNOWN_RUNTIME_TARGETS)[number];
 
 const DEFAULT_RUNTIME_TARGET = KNOWN_RUNTIME_TARGETS.find(({ id }) => id === "local") ?? KNOWN_RUNTIME_TARGETS[0];
 
@@ -85,41 +82,39 @@ if (!DEFAULT_RUNTIME_TARGET) {
   throw new Error("At least one dashboard runtime target must be configured.");
 }
 
-function getExplicitApiOrigin() {
-  const value = process.env.NEXT_PUBLIC_API_URL;
-  if (!value) {
-    return undefined;
-  }
-
-  return normalizeApiOrigin(value, "NEXT_PUBLIC_API_URL");
-}
-
-function getExplicitCloudDashboardUrl() {
-  const nextPublicValue = process.env.NEXT_PUBLIC_CLOUD_DASHBOARD_URL;
-  if (nextPublicValue) {
-    return normalizeOrigin(nextPublicValue, "NEXT_PUBLIC_CLOUD_DASHBOARD_URL");
-  }
-
-  const serverValue = process.env.OPENSHIP_CLOUD_DASHBOARD_URL;
-  if (serverValue) {
-    return normalizeOrigin(serverValue, "OPENSHIP_CLOUD_DASHBOARD_URL");
-  }
-
-  return undefined;
-}
-
 function resolveRuntimeTargetByApiOrigin(apiOrigin: string) {
   return KNOWN_RUNTIME_TARGETS.find(({ apiOrigin: knownApiOrigin }) => knownApiOrigin === apiOrigin);
 }
 
 function resolveRuntimeTarget(rawUrl?: string) {
-  const explicitApiOrigin = getExplicitApiOrigin();
-  if (explicitApiOrigin) {
-    return resolveRuntimeTargetByApiOrigin(explicitApiOrigin);
-  }
-
   if (!rawUrl) {
     return undefined;
+  }
+
+  const parsedUrl = parseHttpUrl(rawUrl);
+  if (parsedUrl && !isProduction()) {
+    const cloudTarget = KNOWN_RUNTIME_TARGETS.find(({ id }) => id === "cloud-saas");
+    if (
+      cloudTarget &&
+      (parsedUrl.hostname === new URL(cloudTarget.dashboardOrigin).hostname ||
+        parsedUrl.hostname === new URL(cloudTarget.apiSiteOrigin).hostname)
+    ) {
+      return cloudTarget;
+    }
+
+    if (parsedUrl.port) {
+      const byDashboardPort = KNOWN_RUNTIME_TARGETS.find(({ dashboardOrigin }) =>
+        new URL(dashboardOrigin).port === parsedUrl.port);
+      if (byDashboardPort) {
+        return byDashboardPort;
+      }
+
+      const byApiPort = KNOWN_RUNTIME_TARGETS.find(({ apiOrigin }) =>
+        new URL(apiOrigin).port === parsedUrl.port);
+      if (byApiPort) {
+        return byApiPort;
+      }
+    }
   }
 
   const origin = normalizeOrigin(rawUrl);
@@ -132,7 +127,13 @@ function resolveRuntimeTarget(rawUrl?: string) {
 }
 
 function resolveApiOrigin(rawUrl?: string) {
-  return getExplicitApiOrigin() ?? resolveRuntimeTarget(rawUrl)?.apiOrigin;
+  const target = resolveRuntimeTarget(rawUrl);
+  if (target) {
+    return target.apiOrigin;
+  }
+
+  const origin = rawUrl ? normalizeApiOrigin(rawUrl) : undefined;
+  return origin ? resolveRuntimeTargetByApiOrigin(origin)?.apiOrigin : undefined;
 }
 
 function requireResolvedApiOrigin(context: string, rawUrl?: string) {
@@ -143,7 +144,7 @@ function requireResolvedApiOrigin(context: string, rawUrl?: string) {
 
   if (isProduction()) {
     throw new Error(
-      `${context}: could not resolve the API origin. Set NEXT_PUBLIC_API_URL or use a known dashboard/API target.`,
+      `${context}: could not resolve the API origin from a known Openship runtime target.`,
     );
   }
 
@@ -162,14 +163,32 @@ function getRequestOriginFromHeaders(headers: Pick<Headers, "get">) {
   return `${proto}://${host}`;
 }
 
-function buildDeploymentInfoFallback(target?: RuntimeTarget): DeploymentInfoFallback {
+function getCurrentRuntimeTarget(rawUrl?: string) {
+  const browserOrigin = typeof window !== "undefined" ? window.location.origin : undefined;
+  return resolveRuntimeTarget(rawUrl ?? browserOrigin) ?? DEFAULT_RUNTIME_TARGET;
+}
+
+function resolveKnownRuntimeTargetById(id: RuntimeTarget["id"]) {
+  return KNOWN_RUNTIME_TARGETS.find((target) => target.id === id);
+}
+
+function getCloudRuntimeTargetFor(target: KnownRuntimeTarget) {
+  return resolveKnownRuntimeTargetById(target.cloudTargetId) ?? target;
+}
+
+function getCloudRuntimeTarget(rawUrl?: string) {
+  return getCloudRuntimeTargetFor(getCurrentRuntimeTarget(rawUrl));
+}
+
+function buildDeploymentInfoFallback(target?: KnownRuntimeTarget): DeploymentInfoFallback {
   const runtimeTarget = target ?? DEFAULT_RUNTIME_TARGET;
+  const cloudTarget = getCloudRuntimeTargetFor(runtimeTarget);
 
   return {
     selfHosted: runtimeTarget.selfHosted,
     deployMode: runtimeTarget.deployMode,
     authMode: runtimeTarget.authMode,
-    cloudAuthUrl: getCloudDashboardUrl(),
+    cloudAuthUrl: cloudTarget.dashboardOrigin,
   };
 }
 
@@ -199,8 +218,7 @@ export function getCloudDashboardUrl(rawUrl?: string) {
     return normalizeOrigin(rawUrl, "cloudAuthUrl")!;
   }
 
-  return getExplicitCloudDashboardUrl()
-    ?? normalizeOrigin(CLOUD_DASHBOARD_URL, "CLOUD_DASHBOARD_URL")!;
+  return getCloudRuntimeTarget(rawUrl).dashboardOrigin;
 }
 
 export function getCloudApiOrigin(rawUrl?: string) {
@@ -208,17 +226,7 @@ export function getCloudApiOrigin(rawUrl?: string) {
     return normalizeApiOrigin(rawUrl, "cloudApiUrl")!;
   }
 
-  const nextPublicValue = process.env.NEXT_PUBLIC_CLOUD_API_URL;
-  if (nextPublicValue) {
-    return normalizeApiOrigin(nextPublicValue, "NEXT_PUBLIC_CLOUD_API_URL")!;
-  }
-
-  const serverValue = process.env.OPENSHIP_CLOUD_URL;
-  if (serverValue) {
-    return normalizeApiOrigin(serverValue, "OPENSHIP_CLOUD_URL")!;
-  }
-
-  return normalizeApiOrigin(CLOUD_API_URL, "CLOUD_API_URL")!;
+  return getCloudRuntimeTarget(rawUrl).apiOrigin;
 }
 
 export function getFallbackDeploymentInfo(rawUrl?: string) {

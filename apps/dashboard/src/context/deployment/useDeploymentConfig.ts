@@ -9,6 +9,7 @@ import type { BuildMode } from "@/lib/api/settings";
 import { STACKS, type StackDefinition } from "@repo/core";
 import type { BuildStrategy, DeploymentConfig } from "./types";
 import { DEFAULT_CONFIG } from "./types";
+import { normalizeSubdomain } from "@/utils/subdomain";
 
 /**
  * Owns the deployment configuration state and prepare logic.
@@ -135,7 +136,7 @@ export function useDeploymentConfig() {
           owner: response.repository.owner?.login || sourceOwner,
           projectName: project?.name || repoName,
           projectType,
-          domain: project?.slug || repoName.toLowerCase(),
+          domain: project?.slug || normalizeSubdomain(repoName),
           framework: detectedStack,
           detectedFramework: detectedStack,
           buildStrategy: normalizeBuildStrategy(projectType, stackDef),
@@ -209,7 +210,7 @@ export function useDeploymentConfig() {
           localPath: path,
           projectName: project?.name || name,
           projectType,
-          domain: project?.slug || name.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+          domain: project?.slug || normalizeSubdomain(name),
           framework: detectedStack,
           detectedFramework: detectedStack,
           buildStrategy: normalizeBuildStrategy(projectType, stackDef),

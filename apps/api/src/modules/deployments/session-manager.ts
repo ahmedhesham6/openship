@@ -76,6 +76,7 @@ function formatLogPayload(entry: LogEntry, eventId: number): string {
     step: entry.step,
     stepStatus: entry.stepStatus,
     level: entry.level,
+    serviceName: entry.serviceName,
   });
 }
 

@@ -3,7 +3,7 @@
  */
 import { Hono } from "hono";
 import { hostname } from "node:os";
-import { env } from "../../config/env";
+import { cloudRuntimeTarget, env } from "../../config/env";
 
 /** Computed once — hostname never changes at runtime. */
 const machineName = env.DEPLOY_MODE === "desktop" ? hostname() : undefined;
@@ -39,7 +39,7 @@ healthRoutes.get("/env", async (c) => {
     selfHosted: !env.CLOUD_MODE,
     deployMode: env.DEPLOY_MODE,
     authMode,
-    cloudAuthUrl: env.OPENSHIP_CLOUD_DASHBOARD_URL,
+    cloudAuthUrl: cloudRuntimeTarget.dashboard,
     ...(machineName && { machineName }),
     ...(env.HOST_DOMAIN && { hostDomain: env.HOST_DOMAIN }),
   });

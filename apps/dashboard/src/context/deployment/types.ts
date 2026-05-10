@@ -22,6 +22,16 @@ export interface ComposeServiceInfo {
   ports: string[];
   dependsOn: string[];
   environment: Record<string, string>;
+  environmentMeta?: Record<
+    string,
+    {
+      source: "env-file" | "default" | "missing" | "interpolated";
+      variable?: string;
+      defaultValue?: string;
+      resolvedValue: string;
+      expression?: string;
+    }
+  >;
   volumes: string[];
   command?: string;
   restart?: string;

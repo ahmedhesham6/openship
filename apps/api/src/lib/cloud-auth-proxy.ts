@@ -13,7 +13,7 @@
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { db, schema, repos, eq } from "@repo/db";
 import { encrypt } from "./encryption";
-import { env } from "../config/env";
+import { cloudRuntimeTarget, env } from "../config/env";
 
 export interface CloudUser {
   id: string;
@@ -185,7 +185,7 @@ function exchangeHandoffCode(code: string, codeVerifier?: string): { user: Cloud
  *   authorization was initiated with a code_challenge.
  */
 async function exchangeCodeWithCloud(code: string, codeVerifier?: string): Promise<{ user: CloudUser; sessionToken: string } | null> {
-  const res = await fetch(`${env.OPENSHIP_CLOUD_URL}/api/cloud/exchange-code`, {
+  const res = await fetch(`${cloudRuntimeTarget.api}/api/cloud/exchange-code`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code, code_verifier: codeVerifier }),

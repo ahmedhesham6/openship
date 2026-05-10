@@ -6,12 +6,6 @@ import type { PlanId } from "./types";
 
 export const APP_NAME = "Openship";
 
-export const DEFAULT_PORT = {
-  web: 3000,
-  dashboard: 3001,
-  api: 4000,
-} as const;
-
 export const DEPLOYMENT_STATUSES = [
   "queued",
   "building",

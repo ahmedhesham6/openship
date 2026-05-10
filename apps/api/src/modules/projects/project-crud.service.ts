@@ -254,7 +254,19 @@ export async function ensureProject(userId: string, data: EnsureProjectBody) {
       }
     }
     if (data.hasBuild !== undefined) update.hasBuild = data.hasBuild;
-    if (data.slug !== undefined) update.slug = data.slug;
+    if (data.slug !== undefined && data.slug !== project.slug) {
+      const existingProject = await repos.project.findBySlug(userId, data.slug);
+      if (existingProject && existingProject.id !== project.id) {
+        throw new ConflictError(`Project slug "${data.slug}" already exists`);
+      }
+
+      const existingApp = await repos.projectApp.findBySlug(userId, data.slug);
+      if (existingApp && existingApp.id !== project.appId) {
+        throw new ConflictError(`Project slug "${data.slug}" already exists`);
+      }
+
+      update.slug = data.slug;
+    }
     if (data.gitBranch !== undefined && (data.projectId || !project.gitBranch)) {
       update.gitBranch = data.gitBranch;
     }
@@ -273,6 +285,13 @@ export async function ensureProject(userId: string, data: EnsureProjectBody) {
 
     if (Object.keys(update).length > 0) {
       await repos.project.update(project.id, update);
+    }
+    if (
+      project.appId &&
+      typeof update.slug === "string" &&
+      project.environmentSlug === "production"
+    ) {
+      await repos.projectApp.update(project.appId, { slug: update.slug });
     }
   }
 

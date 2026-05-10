@@ -1,11 +1,8 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import {
-  waitForApi,
-  LOCAL_API_URL,
-  LOCAL_DASHBOARD_URL,
-} from "@repo/onboarding";
+import { LOCAL_API_URL, LOCAL_DASHBOARD_URL } from "@repo/core";
+import { waitForApi } from "@repo/onboarding";
 
 export const setupCommand = new Command("setup")
   .description("Launch the Openship setup wizard in your browser")

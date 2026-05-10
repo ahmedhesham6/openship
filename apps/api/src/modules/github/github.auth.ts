@@ -333,17 +333,20 @@ export async function getUserStatus(userId: string) {
         "X-GitHub-Api-Version": "2022-11-28",
       },
     });
-    if (!res.ok) return { connected: false as const, tokenSource: null };
+    if (!res.ok) {
+      return { connected: false as const, tokenSource: null };
+    }
     const user = (await res.json()) as { login: string; id: number; avatar_url: string };
-    return { connected: true as const, tokenSource, ...user };
+    return { connected: true as const, tokenSource, oauthConnected: true as const, ...user };
   } catch {
     return { connected: false as const, tokenSource: null };
   }
 }
 
 /**
- * Get all installations that the user has access to.
- * Returns empty array if the user has no GitHub OAuth token.
+ * Get all GitHub App installations that the user has access to.
+ * Requires an active user OAuth token. When the live GitHub lookup fails after
+ * OAuth was validated, we can use the stored app-install snapshot as a fallback.
  */
 export async function getUserInstallations(
   userId: string,
@@ -393,8 +396,8 @@ async function getStoredInstallations(userId: string): Promise<GitHubInstallatio
     id: installation.installationId,
     account: {
       login: installation.owner,
-      id: Number(installation.providerOwnerId ?? 0),
-      avatar_url: "",
+      id: storedAccountId(installation.providerOwnerId),
+      avatar_url: storedAccountAvatarUrl(installation.owner, installation.providerOwnerId),
       type: installation.ownerType === "Organization" ? "Organization" : "User",
     },
     app_id: Number(env.GITHUB_APP_ID ?? 0),
@@ -402,6 +405,17 @@ async function getStoredInstallations(userId: string): Promise<GitHubInstallatio
     permissions: {},
     events: [],
   }));
+}
+
+function storedAccountId(providerOwnerId?: string | null): number {
+  const id = Number(providerOwnerId);
+  return Number.isFinite(id) && id > 0 ? id : 0;
+}
+
+function storedAccountAvatarUrl(owner: string, providerOwnerId?: string | null): string {
+  const id = storedAccountId(providerOwnerId);
+  if (id > 0) return `https://avatars.githubusercontent.com/u/${id}?v=4`;
+  return `https://github.com/${encodeURIComponent(owner)}.png`;
 }
 
 /**
@@ -456,10 +470,10 @@ export function getInstallUrl(): string {
 }
 
 /**
- * Disconnect a user from GitHub — removes all installations and invalidates cache.
+ * Disconnect a user from GitHub OAuth.
+ * GitHub App installations remain until GitHub sends uninstall/suspend events.
  */
 export async function disconnectUser(userId: string): Promise<void> {
   await repos.account.unlinkProvider(userId, "github");
-  await repos.gitInstallation.removeAllForUser(userId);
   invalidateUserGitHubCache(userId);
 }

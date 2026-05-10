@@ -23,13 +23,7 @@ setTimeout(() => {
   const em = spawn("npx", ["electronmon", "."], {
     cwd: root,
     stdio: "inherit",
-    env: {
-      ...process.env,
-      // Default to the public cloud control plane.
-      // Override these vars when testing against a local SaaS dev instance.
-      OPENSHIP_CLOUD_URL: process.env.OPENSHIP_CLOUD_URL || "https://api.openship.io",
-      OPENSHIP_CLOUD_DASHBOARD_URL: process.env.OPENSHIP_CLOUD_DASHBOARD_URL || "https://app.openship.io",
-    },
+    env: process.env,
   });
 
   em.on("close", (code) => {

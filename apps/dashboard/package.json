@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "bun run scripts/dev.ts local",
     "dev:saas": "bun run scripts/dev.ts saas",
-    "dev:saas:local": "bun run scripts/dev.ts saas local",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

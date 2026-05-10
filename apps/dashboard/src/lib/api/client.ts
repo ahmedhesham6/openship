@@ -7,7 +7,7 @@ import { getRestApiBaseUrl } from "./urls";
  * Auth calls should go through `auth-client.ts` (Better Auth SDK).
  *
  * Features:
- *   - Automatic base URL resolution (`NEXT_PUBLIC_API_URL`)
+ *   - Automatic base URL resolution from the shared runtime targets
  *   - 15s request timeout (configurable per-call)
  *   - Credentials included by default (cookies forwarded cross-origin)
  *   - Typed JSON responses via generics

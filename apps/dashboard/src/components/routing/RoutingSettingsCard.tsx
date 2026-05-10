@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Globe, Shield, Server, X, Copy, Check, Info, Eye, EyeOff, Link2, ExternalLink, Hash } from "lucide-react";
 import { domainsApi } from "@/lib/api";
 import { usePlatform } from "@/context/PlatformContext";
+import { normalizeSubdomain, normalizeSubdomainInput } from "@/utils/subdomain";
 
 interface DnsRecord {
   type: "CNAME" | "A" | "TXT";
@@ -123,7 +124,7 @@ export function RoutingSettingsCard({
   const hasRecords = dnsRecords.length > 0 && dnsRecords.every((record) => record.value);
 
   const commitFreeDomain = () => {
-    const next = draftDomain.toLowerCase().replace(/[^a-z0-9-]/g, "");
+    const next = normalizeSubdomain(draftDomain);
     void onDomainChange(next);
   };
 
@@ -186,7 +187,7 @@ export function RoutingSettingsCard({
                   <input
                     value={saveMode === "explicit" ? draftDomain : domain}
                     onChange={(event) => {
-                      const next = event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "");
+                      const next = normalizeSubdomainInput(event.target.value);
                       if (saveMode === "explicit") {
                         setDraftDomain(next);
                       } else {

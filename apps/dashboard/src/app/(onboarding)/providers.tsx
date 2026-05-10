@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext } from "react";
-import { CLOUD_DASHBOARD_URL } from "@repo/onboarding";
+import { CLOUD_DASHBOARD_URL } from "@repo/core";
 
 interface OnboardingContextValue {
   authMode: "cloud" | "local" | "none";

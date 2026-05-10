@@ -10,6 +10,7 @@ export interface BuildLog {
   type: "info" | "success" | "error";
   text: string;
   time: string;
+  serviceName?: string;
 }
 
 export interface SSEMessage {
@@ -23,21 +24,21 @@ export interface SSEMessage {
  */
 export function detectPhase(logText: string): PhaseInfo {
   const lowerText = logText.toLowerCase();
-  
+
   // Check for explicit phase markers (---PHASE: xxx---)
   const phaseMarker = logText.match(/---PHASE:\s*(\w+)---/i);
   if (phaseMarker) {
     const phaseName = phaseMarker[1].toLowerCase();
     return getPhaseInfoFromName(phaseName);
   }
-  
+
   // Phase detection patterns
   const patterns = {
     cloning: [
       /clon(ing|e)/i,
       /git clone/i,
       /fetch(ing)? repository/i,
-      /download(ing)? (from )?repository/i
+      /download(ing)? (from )?repository/i,
     ],
     installing: [
       /install(ing)? dependencies/i,
@@ -46,7 +47,7 @@ export function detectPhase(logText: string): PhaseInfo {
       /pnpm install/i,
       /packages? installed/i,
       /node_modules/i,
-      /dependencies/i
+      /dependencies/i,
     ],
     building: [
       /build(ing)?/i,
@@ -54,7 +55,7 @@ export function detectPhase(logText: string): PhaseInfo {
       /bundl(ing|e)/i,
       /optimiz(ing|e)/i,
       /webpack/i,
-      /production build/i
+      /production build/i,
     ],
     deploying: [
       /deploy(ing)?/i,
@@ -62,7 +63,7 @@ export function detectPhase(logText: string): PhaseInfo {
       /publishing/i,
       /edge network/i,
       /global regions/i,
-      /distribution/i
+      /distribution/i,
     ],
     ready: [
       /deployment (complete|ready|successful)/i,
@@ -70,27 +71,27 @@ export function detectPhase(logText: string): PhaseInfo {
       /live and running/i,
       /🎉/,
       /deployment ready/i,
-      /done/i
-    ]
+      /done/i,
+    ],
   };
 
   // Detect phase
   let phase: DeploymentPhase = "cloning";
   let stepIndex = 0;
 
-  if (patterns.ready.some(p => p.test(lowerText))) {
+  if (patterns.ready.some((p) => p.test(lowerText))) {
     phase = "ready";
     stepIndex = 4;
-  } else if (patterns.deploying.some(p => p.test(lowerText))) {
+  } else if (patterns.deploying.some((p) => p.test(lowerText))) {
     phase = "deploying";
     stepIndex = 3;
-  } else if (patterns.building.some(p => p.test(lowerText))) {
+  } else if (patterns.building.some((p) => p.test(lowerText))) {
     phase = "building";
     stepIndex = 2;
-  } else if (patterns.installing.some(p => p.test(lowerText))) {
+  } else if (patterns.installing.some((p) => p.test(lowerText))) {
     phase = "installing";
     stepIndex = 1;
-  } else if (patterns.cloning.some(p => p.test(lowerText))) {
+  } else if (patterns.cloning.some((p) => p.test(lowerText))) {
     phase = "cloning";
     stepIndex = 0;
   }
@@ -105,21 +106,22 @@ export function detectPhase(logText: string): PhaseInfo {
  * Maps phase name to PhaseInfo
  */
 function getPhaseInfoFromName(phaseName: string): PhaseInfo {
-  const phaseMap: Record<string, { phase: DeploymentPhase; stepIndex: number; progress: number }> = {
-    clone: { phase: "cloning", stepIndex: 0, progress: 5 },
-    cloning: { phase: "cloning", stepIndex: 0, progress: 5 },
-    install: { phase: "installing", stepIndex: 1, progress: 25 },
-    installing: { phase: "installing", stepIndex: 1, progress: 25 },
-    dependencies: { phase: "installing", stepIndex: 1, progress: 25 },
-    build: { phase: "building", stepIndex: 2, progress: 50 },
-    building: { phase: "building", stepIndex: 2, progress: 50 },
-    deploy: { phase: "deploying", stepIndex: 3, progress: 75 },
-    deploying: { phase: "deploying", stepIndex: 3, progress: 75 },
-    upload: { phase: "deploying", stepIndex: 3, progress: 75 },
-    ready: { phase: "ready", stepIndex: 4, progress: 100 },
-    done: { phase: "ready", stepIndex: 4, progress: 100 },
-    complete: { phase: "ready", stepIndex: 4, progress: 100 },
-  };
+  const phaseMap: Record<string, { phase: DeploymentPhase; stepIndex: number; progress: number }> =
+    {
+      clone: { phase: "cloning", stepIndex: 0, progress: 5 },
+      cloning: { phase: "cloning", stepIndex: 0, progress: 5 },
+      install: { phase: "installing", stepIndex: 1, progress: 25 },
+      installing: { phase: "installing", stepIndex: 1, progress: 25 },
+      dependencies: { phase: "installing", stepIndex: 1, progress: 25 },
+      build: { phase: "building", stepIndex: 2, progress: 50 },
+      building: { phase: "building", stepIndex: 2, progress: 50 },
+      deploy: { phase: "deploying", stepIndex: 3, progress: 75 },
+      deploying: { phase: "deploying", stepIndex: 3, progress: 75 },
+      upload: { phase: "deploying", stepIndex: 3, progress: 75 },
+      ready: { phase: "ready", stepIndex: 4, progress: 100 },
+      done: { phase: "ready", stepIndex: 4, progress: 100 },
+      complete: { phase: "ready", stepIndex: 4, progress: 100 },
+    };
 
   return phaseMap[phaseName] || { phase: "cloning", stepIndex: 0, progress: 0 };
 }
@@ -133,7 +135,7 @@ function calculateProgress(phase: DeploymentPhase, logText: string): number {
     installing: 25,
     building: 50,
     deploying: 75,
-    ready: 100
+    ready: 100,
   };
 
   const baseValue = baseProgress[phase];
@@ -148,7 +150,7 @@ function calculateProgress(phase: DeploymentPhase, logText: string): number {
   }
 
   // Check for completion indicators
-  if (logText.includes('✓') || logText.includes('complete') || logText.includes('success')) {
+  if (logText.includes("✓") || logText.includes("complete") || logText.includes("success")) {
     return Math.min(baseValue + 20, 100);
   }
 
@@ -161,35 +163,35 @@ function calculateProgress(phase: DeploymentPhase, logText: string): number {
  */
 export function parseLogEntry(text: string, timestamp: string, startTime: number): BuildLog {
   const lowerText = text.toLowerCase();
-  
+
   // Skip phase markers in the log display
   if (text.match(/---PHASE:\s*\w+---/i)) {
     // Return a special marker that can be filtered out if needed
     const currentTime = Math.floor((new Date(timestamp).getTime() - startTime) / 1000);
     const mins = Math.floor(currentTime / 60);
     const secs = currentTime % 60;
-    const time = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    
+    const time = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+
     return { type: "info", text: "", time }; // Empty text to hide phase markers
   }
-  
+
   // Determine log type
   let type: "info" | "success" | "error" = "info";
-  
+
   if (
-    text.includes('✓') || 
-    lowerText.includes('success') || 
-    lowerText.includes('complete') ||
-    lowerText.includes('deployed') ||
-    lowerText.includes('done') ||
-    text.includes('🎉')
+    text.includes("✓") ||
+    lowerText.includes("success") ||
+    lowerText.includes("complete") ||
+    lowerText.includes("deployed") ||
+    lowerText.includes("done") ||
+    text.includes("🎉")
   ) {
     type = "success";
   } else if (
-    lowerText.includes('error') || 
-    lowerText.includes('fail') || 
-    lowerText.includes('✗') ||
-    text.includes('❌')
+    lowerText.includes("error") ||
+    lowerText.includes("fail") ||
+    lowerText.includes("✗") ||
+    text.includes("❌")
   ) {
     type = "error";
   }
@@ -198,7 +200,7 @@ export function parseLogEntry(text: string, timestamp: string, startTime: number
   const currentTime = Math.floor((new Date(timestamp).getTime() - startTime) / 1000);
   const mins = Math.floor(currentTime / 60);
   const secs = currentTime % 60;
-  const time = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  const time = `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 
   // Clean up the text (remove extra whitespace, line breaks)
   const cleanText = text.trim();
@@ -229,4 +231,3 @@ export function aggregatePhaseInfo(logs: BuildLog[]): PhaseInfo {
 
   return currentPhase;
 }
-

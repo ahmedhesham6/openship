@@ -37,10 +37,11 @@ export function buildProjectRouteDomains(opts: {
   project: Project;
   projectDomains: Domain[];
   customDomain?: string;
+  managedSlug?: string;
   runtimeName: string;
   usesManagedRouting: boolean;
 }): PlannedRouteDomain[] {
-  const { project, projectDomains, customDomain, runtimeName, usesManagedRouting } = opts;
+  const { project, projectDomains, customDomain, managedSlug, runtimeName, usesManagedRouting } = opts;
   const seen = new Set<string>();
   const planned: PlannedRouteDomain[] = [];
 
@@ -64,8 +65,9 @@ export function buildProjectRouteDomains(opts: {
   for (const domain of projectDomains) {
     if (domain.verified) add(domain.hostname);
   }
-  if (project.slug && usesManagedRouting) {
-    add(`${project.slug}.${getRoutingBaseDomain()}`, true);
+  const routeSlug = managedSlug || project.slug;
+  if (routeSlug && usesManagedRouting) {
+    add(`${routeSlug}.${getRoutingBaseDomain()}`, true);
   }
 
   return planned;

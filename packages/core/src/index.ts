@@ -5,3 +5,4 @@ export * from "./system";
 export * from "./utils";
 export * from "./errors";
 export * from "./service-routing";
+export * from "./runtime-config";

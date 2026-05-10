@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitHubPushPayload } from "./github.types";
+import type { GitHubPushPayload } from "../../../src/modules/github/github.types";
 
 const { findByGitRepo, getRepository, triggerDeployment } = vi.hoisted(() => ({
   findByGitRepo: vi.fn(),
@@ -18,19 +18,20 @@ vi.mock("@repo/db", () => ({
     gitInstallation: {
       upsert: vi.fn(),
       removeByInstallationId: vi.fn(),
+      removeByInstallationIdForProvider: vi.fn(),
     },
   },
 }));
 
-vi.mock("../deployments/build.service", () => ({
+vi.mock("../../../src/modules/deployments/build.service", () => ({
   triggerDeployment,
 }));
 
-vi.mock("./github.service", () => ({
+vi.mock("../../../src/modules/github/github.service", () => ({
   getRepository,
 }));
 
-import { githubWebhookProvider } from "./github.webhook";
+import { githubWebhookProvider } from "../../../src/modules/github/github.webhook";
 
 function makePushPayload(
   ref: string,

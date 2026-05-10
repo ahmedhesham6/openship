@@ -150,7 +150,9 @@ export const DeployTargetSummary: React.FC<CompactSummaryProps> = ({
   onEdit,
 }) => {
   const target = targetLabels[deployTarget];
-  const build = buildLabels[buildStrategy];
+  const build = deployTarget === "cloud"
+    ? { label: "Openship Cloud", icon: <Cloud className="size-3.5" /> }
+    : buildLabels[buildStrategy];
   const deployLabel = deployTarget === "server" && serverName
     ? serverName
     : target.label;
@@ -259,9 +261,15 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
     }
 
     if (hasCloudOption) {
-      updateConfig({ deployTarget: "cloud", serverId: undefined });
+      updateConfig({ deployTarget: "cloud", serverId: undefined, buildStrategy: "server" });
     }
   }, [ready, hasChoice, hasServers, hasCloudOption, servers, updateConfig]);
+
+  useEffect(() => {
+    if (config.deployTarget === "cloud" && config.buildStrategy !== "server") {
+      updateConfig({ buildStrategy: "server" });
+    }
+  }, [config.deployTarget, config.buildStrategy, updateConfig]);
 
   // Auto-select single server
   useEffect(() => {
@@ -274,6 +282,7 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
     const updates: Partial<typeof config> = { deployTarget: target };
     if (target === "cloud") {
       updates.serverId = undefined;
+      updates.buildStrategy = "server";
     }
     if (target === "server" && isSingleServer) {
       updates.serverId = servers[0].id;
@@ -343,6 +352,14 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
       description: "Build on the deploy target. Best when your machine has limited resources.",
     },
   ];
+  const visibleBuildOptions = config.deployTarget === "cloud"
+    ? [{
+        value: "server" as const,
+        icon: <Cloud className="size-5" />,
+        label: "Openship Cloud",
+        description: "Build in managed cloud infrastructure.",
+      }]
+    : buildOptions;
 
   const hasAnyDeployTarget = deployTargetOptions.length > 0;
   const canContinue = ready && (
@@ -467,7 +484,7 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
             </p>
           </div>
           <div className="space-y-2">
-            {buildOptions.map((opt) => (
+            {visibleBuildOptions.map((opt) => (
               <OptionCard
                 key={opt.value}
                 value={opt.value}

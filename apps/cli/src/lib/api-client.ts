@@ -1,11 +1,10 @@
 /**
  * CLI HTTP client — communicates with the Openship API.
  */
-
-const DEFAULT_API_URL = "http://localhost:4000/api";
+import { LOCAL_API_URL } from "@repo/core";
 
 export function getApiUrl(): string {
-  return process.env.OPENSHIP_API_URL || DEFAULT_API_URL;
+  return `${LOCAL_API_URL}/api`;
 }
 
 export async function apiRequest(path: string, options?: RequestInit) {

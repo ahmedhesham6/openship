@@ -10,10 +10,17 @@
  */
 
 import { repos, type Deployment, type Project, type Service } from "@repo/db";
-import { getProjectType, type StackId } from "@repo/core";
-import { BuildLogger, DockerRuntime, type LogEntry, type MultiServiceRuntimeAdapter } from "@repo/adapters";
+import { getProjectType, resolveServiceHostnameLabel, type StackId } from "@repo/core";
+import {
+  BuildLogger,
+  DockerRuntime,
+  type LogEntry,
+  type MultiServiceRuntimeAdapter,
+  type ResourceConfig,
+} from "@repo/adapters";
 import { decryptEnvMap } from "../../../lib/encryption";
 import * as sessionManager from "../session-manager";
+import { parseServicePort } from "./domain-helpers";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -83,6 +90,29 @@ function topoSort(services: Service[]): Service[] {
   return sorted;
 }
 
+function resolveServicePublicPort(service: Service): number | undefined {
+  if (!service.exposed) return undefined;
+  return (
+    parseServicePort(service.exposedPort ?? undefined) ??
+    parseServicePort(((service.ports as string[]) ?? [])[0]) ??
+    undefined
+  );
+}
+
+function resolveServicePublicSlug(project: Project, service: Service): string | undefined {
+  if (!service.exposed || service.domainType === "custom") return undefined;
+  return resolveServiceHostnameLabel(
+    project.slug ?? project.name,
+    service.name,
+    service.domain ?? undefined,
+  );
+}
+
+function resolveServiceCustomDomain(service: Service): string | undefined {
+  if (!service.exposed || service.domainType !== "custom") return undefined;
+  return service.customDomain ?? undefined;
+}
+
 // ─── Main compose deploy function ────────────────────────────────────────────
 
 /**
@@ -97,6 +127,7 @@ export async function deployComposeServices(
   opts?: {
     builtImages?: Map<string, string>;
     buildFailures?: Map<string, string>;
+    resources?: ResourceConfig;
   },
 ): Promise<ComposeDeployResult> {
   const services = await repos.service.listByProject(project.id);
@@ -125,11 +156,12 @@ export async function deployComposeServices(
   logger.step("deploy", "running", `Deploying ${ordered.length} services...`);
   logger.log("Preparing shared service group for compose deployment...\n");
 
-  // 1. Ensure shared runtime group (Docker network today, cloud workspace later)
+  // 1. Ensure shared runtime group (Docker network or cloud service group)
   const group = await runtime.ensureServiceGroup({
     deploymentId: dep.id,
     projectId: project.id,
     slug: project.slug,
+    resources: opts?.resources,
   });
   logger.log(`Service group ready for ${project.slug}.\n`);
 
@@ -166,12 +198,18 @@ export async function deployComposeServices(
     // Load service-specific env vars
     const serviceEnvMap = await repos.project.getEnvMap(project.id, dep.environment, svc.id);
     const decryptedServiceEnv = decryptEnvMap(serviceEnvMap, (key) => {
-      logger.log(`Warning: failed to decrypt env var "${key}" for service "${svc.name}", skipping.\n`, "warn");
+      logger.log(
+        `Warning: failed to decrypt env var "${key}" for service "${svc.name}", skipping.\n`,
+        "warn",
+        {
+          serviceName: svc.name,
+        },
+      );
     });
 
     // Merge: compose env (defaults) → project env → service-specific env → deployment overrides
     const mergedEnv: Record<string, string> = {
-      ...(svc.environment as Record<string, string> ?? {}),
+      ...((svc.environment as Record<string, string>) ?? {}),
       ...decryptedProjectEnv,
       ...decryptedServiceEnv,
       ...depEnv,
@@ -179,7 +217,9 @@ export async function deployComposeServices(
 
     const buildFailure = opts?.buildFailures?.get(svc.id);
     if (buildFailure) {
-      logger.log(`Service "${svc.name}" build failed: ${buildFailure}\n`, "error");
+      logger.log(`Service "${svc.name}" build failed: ${buildFailure}\n`, "error", {
+        serviceName: svc.name,
+      });
       sessionManager.broadcastServiceStatus(dep.id, {
         serviceName: svc.name,
         serviceId: svc.id,
@@ -204,7 +244,7 @@ export async function deployComposeServices(
     const image = opts?.builtImages?.get(svc.id) ?? svc.image ?? "";
     if (!image) {
       const message = `No image available for service "${svc.name}"`;
-      logger.log(`${message}\n`, "error");
+      logger.log(`${message}\n`, "error", { serviceName: svc.name });
       sessionManager.broadcastServiceStatus(dep.id, {
         serviceName: svc.name,
         serviceId: svc.id,
@@ -225,7 +265,9 @@ export async function deployComposeServices(
       continue;
     }
 
-    logger.log(`Deploying service "${svc.name}" (${image})...\n`);
+    logger.log(`Deploying service "${svc.name}" (${image})...\n`, "info", {
+      serviceName: svc.name,
+    });
 
     // Broadcast per-service "deploying" status to SSE subscribers
     sessionManager.broadcastServiceStatus(dep.id, {
@@ -239,7 +281,13 @@ export async function deployComposeServices(
       if (previous?.containerId) {
         try {
           await runtime.destroy(previous.containerId);
-          logger.log(`Replaced previous container for "${svc.name}" (${previous.containerId.slice(0, 12)}).\n`);
+          logger.log(
+            `Replaced previous container for "${svc.name}" (${previous.containerId.slice(0, 12)}).\n`,
+            "info",
+            {
+              serviceName: svc.name,
+            },
+          );
           if (
             previous.imageRef &&
             previous.imageRef !== image &&
@@ -247,12 +295,24 @@ export async function deployComposeServices(
           ) {
             await runtime.removeImage(previous.imageRef).catch((err) => {
               const message = err instanceof Error ? err.message : "Unknown error";
-              logger.log(`Warning: failed to remove previous image for "${svc.name}": ${message}\n`, "warn");
+              logger.log(
+                `Warning: failed to remove previous image for "${svc.name}": ${message}\n`,
+                "warn",
+                {
+                  serviceName: svc.name,
+                },
+              );
             });
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unknown error";
-          logger.log(`Warning: failed to stop previous container for "${svc.name}": ${message}\n`, "warn");
+          logger.log(
+            `Warning: failed to stop previous container for "${svc.name}": ${message}\n`,
+            "warn",
+            {
+              serviceName: svc.name,
+            },
+          );
         }
       }
 
@@ -269,9 +329,17 @@ export async function deployComposeServices(
           volumes: (svc.volumes as string[]) ?? [],
           command: svc.command ?? undefined,
           restart: svc.restart ?? "unless-stopped",
+          resources: opts?.resources,
+          expose: svc.exposed,
+          publicPort: resolveServicePublicPort(svc),
+          publicSlug: resolveServicePublicSlug(project, svc),
+          customDomain: resolveServiceCustomDomain(svc),
         },
         (entry: LogEntry) => {
-          sessionManager.appendLog(dep.id, entry);
+          sessionManager.appendLog(dep.id, {
+            ...entry,
+            serviceName: entry.serviceName ?? svc.name,
+          });
         },
       );
 
@@ -305,10 +373,14 @@ export async function deployComposeServices(
         hostPort: result.hostPort,
       });
 
-      logger.log(`Service "${svc.name}" deployed successfully.\n`);
+      logger.log(`Service "${svc.name}" deployed successfully.\n`, "info", {
+        serviceName: svc.name,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      logger.log(`Service "${svc.name}" failed: ${message}\n`, "error");
+      logger.log(`Service "${svc.name}" failed: ${message}\n`, "error", {
+        serviceName: svc.name,
+      });
 
       // Broadcast per-service "failed" status to SSE subscribers
       sessionManager.broadcastServiceStatus(dep.id, {
@@ -347,9 +419,10 @@ export async function deployComposeServices(
 
   const failed = results.filter((r) => r.status === "failed");
   const failedNames = failed.map((r) => r.serviceName);
-  const warning = failed.length > 0
-    ? `${failed.length}/${ordered.length} services failed: ${failedNames.join(", ")}`
-    : undefined;
+  const warning =
+    failed.length > 0
+      ? `${failed.length}/${ordered.length} services failed: ${failedNames.join(", ")}`
+      : undefined;
   const firstFailure = failed.find((service) => service.error?.trim())?.error;
 
   if (successful === ordered.length) {
@@ -379,6 +452,6 @@ export async function deployComposeServices(
     },
     services: results,
     warning,
-    error: successful > 0 ? undefined : firstFailure ?? "No services deployed successfully",
+    error: successful > 0 ? undefined : (firstFailure ?? "No services deployed successfully"),
   };
 }

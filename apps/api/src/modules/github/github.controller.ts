@@ -233,7 +233,7 @@ export async function pollConnect(c: Context) {
   return c.json(status);
 }
 
-/** POST /github/disconnect — Disconnect GitHub (remove installations) */
+/** POST /github/disconnect — Disconnect GitHub OAuth without uninstalling the GitHub App */
 export async function disconnect(c: Context) {
   const userId = getUserId(c);
   await githubAuth.disconnectUser(userId);
@@ -255,7 +255,10 @@ export async function listAccounts(c: Context) {
     return c.json({ data: accounts });
   }
 
-  const installations = await githubAuth.getUserInstallations(userId);
+  const status = await githubAuth.getUserStatus(userId);
+  if (!status.connected) return c.json({ data: [] });
+
+  const installations = await githubAuth.getUserInstallations(userId, status);
   const accounts = githubAuth.mapAccounts(installations);
   return c.json({ data: accounts });
 }
@@ -270,6 +273,9 @@ export async function listOrgs(c: Context) {
     return c.json({ data: orgs });
   }
 
+  const status = await githubAuth.getUserStatus(userId);
+  if (!status.connected) return c.json({ data: [] });
+
   const orgs = await githubService.listUserOrgs(userId);
   return c.json({ data: orgs });
 }
@@ -283,6 +289,9 @@ export async function listOrgsWithRepos(c: Context) {
     const data = await githubService.listUserOrgsWithReposViaApi(userId);
     return c.json({ data });
   }
+
+  const status = await githubAuth.getUserStatus(userId);
+  if (!status.connected) return c.json({ data: [] });
 
   const data = await githubService.listUserOrgsWithRepos(userId);
   return c.json({ data });
@@ -306,12 +315,21 @@ export async function listRepos(c: Context) {
   }
 
   // App mode: use GitHub App installation
+  const status = await githubAuth.getUserStatus(userId);
+  if (!status.connected) {
+    return c.json({ error: "Not connected to GitHub" }, 400);
+  }
+
   if (!owner) {
-    const status = await githubAuth.getUserStatus(userId);
-    if (!status.connected) {
+    const installations = await githubAuth.getUserInstallations(userId, status);
+    if (installations.length === 0) {
       return c.json({ error: "Not connected to GitHub" }, 400);
     }
-    const repos = await githubService.listInstallationRepos(userId, status.login);
+    const repos = await githubService.listInstallationRepos(
+      userId,
+      installations[0].account.login,
+      installations[0].id,
+    );
     return c.json({ data: repos });
   }
 
@@ -328,6 +346,11 @@ export async function listOrgRepos(c: Context) {
   if (mode !== "app") {
     const repos = await githubService.listUserOwnedRepos(userId, org);
     return c.json({ data: repos });
+  }
+
+  const status = await githubAuth.getUserStatus(userId);
+  if (!status.connected) {
+    return c.json({ error: "Not connected to GitHub" }, 400);
   }
 
   const repos = await githubService.listInstallationRepos(userId, org);

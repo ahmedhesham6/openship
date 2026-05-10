@@ -13,6 +13,7 @@ import type { DeploymentConfig, DeploymentState, DeploymentStatus } from "./type
 import { DEFAULT_CONFIG, INITIAL_STATE } from "./types";
 
 const ERROR_DEBOUNCE_MS = 1000;
+const MAX_RENDERED_BUILD_LOGS = 2000;
 
 /** Extract a human-readable message from API errors. */
 function extractErrorMessage(err: unknown, fallback: string): string {
@@ -31,6 +32,18 @@ function extractErrorCode(err: unknown): string | null {
     if (body && typeof body.code === "string") return body.code;
   }
   return null;
+}
+
+function logTypeFromStreamMessage(level: unknown, text: string): BuildLog["type"] {
+  if (level === "error") return "error";
+  if (level === "success") return "success";
+
+  const lower = text.toLowerCase();
+  if (lower.includes("error") || lower.includes("fail")) return "error";
+  if (lower.includes("success") || lower.includes("ready") || lower.includes("complete")) {
+    return "success";
+  }
+  return "info";
 }
 
 const STEPS = [
@@ -82,10 +95,12 @@ export function useDeploymentBuild(
   const writeToTerminal = useCallback((data: Uint8Array) => {
     if (terminalRef.current && isTerminalReady.current) {
       terminalRef.current.write(data);
+    } else if (isTerminalReady.current && config.projectType === "services") {
+      return;
     } else {
       pendingLogsBuffer.current.push(data);
     }
-  }, []);
+  }, [config.projectType]);
 
   const flushPendingLogs = useCallback(() => {
     if (terminalRef.current && pendingLogsBuffer.current.length > 0) {
@@ -191,7 +206,7 @@ export function useDeploymentBuild(
     terminalRef,
     autoWriteToTerminal: false,
     callbacks: {
-      onLog: (message, _rawText, rawBytes) => {
+      onLog: (message, rawText, rawBytes) => {
         if (message.eventId !== undefined) {
           if (
             lastEventIdRef.current !== undefined &&
@@ -203,6 +218,24 @@ export function useDeploymentBuild(
         }
         if (rawBytes) {
           writeToTerminal(rawBytes);
+        }
+        if (config.projectType === "services" && rawText) {
+          const serviceName =
+            typeof message.serviceName === "string" && message.serviceName.trim()
+              ? message.serviceName
+              : undefined;
+          if (rawText.trim().length > 0) {
+            const nextLog: BuildLog = {
+              type: logTypeFromStreamMessage((message as { level?: unknown }).level, rawText),
+              text: rawText,
+              time: new Date().toISOString(),
+              serviceName,
+            };
+            setState((prev) => ({
+              ...prev,
+              buildLogs: [...prev.buildLogs, nextLog].slice(-MAX_RENDERED_BUILD_LOGS),
+            }));
+          }
         }
       },
       onPhaseChange: () => {},
@@ -324,7 +357,10 @@ export function useDeploymentBuild(
         port: config.options.productionPort ? Number(config.options.productionPort) : undefined,
         hasServer: config.options.hasServer,
         hasBuild: config.options.hasBuild,
-        slug: config.projectId ? undefined : config.domain || undefined,
+        slug:
+          config.domainType === "free" && config.domain.trim()
+            ? config.domain.trim()
+            : undefined,
       });
 
       if (!projectData.success || !projectData.project_id) {
@@ -654,6 +690,7 @@ export function useDeploymentBuild(
           errorDetails: null,
           pendingPrompt: null,
           currentStepIndex: 0,
+          buildLogs: [],
           screenshots: [],
           serviceStatuses: [],
           buildStartedAt: null,
