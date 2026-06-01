@@ -29,14 +29,17 @@ import {
   CircleX,
   Globe,
   Loader2,
+  Play,
   RefreshCcw,
   RotateCw,
   ScrollText,
   Search,
+  Square,
 } from "lucide-react";
 import {
   mailAdminApi,
   mailApi,
+  type ComponentAction,
   type DnsCheck,
   type DnsCheckStatus,
   type DnsScanResult,
@@ -48,6 +51,7 @@ import { SectionCard } from "./_shared/section-card";
 import { Skeleton } from "./_shared/skeleton";
 import { StatusPill, type PillTone } from "./_shared/status-pill";
 import { LogsDrawer } from "./_shared/logs-drawer";
+import DropdownMenu, { type MenuAction } from "@/components/ui/DropdownMenu";
 
 const HEALTH_POLL_MS = 10_000;
 
@@ -235,11 +239,9 @@ export function HealthTab({ serverId }: { serverId: string }) {
 // ─── Rows ────────────────────────────────────────────────────────────────────
 
 /**
- * Daemon row — purely observational. Live status pill on every row; an
- * inline "Fix" + "Logs" pair appears only when the component is actually
- * broken (failed / inactive / missing). Routine controls (start, stop,
- * restart of a healthy daemon) live in Advanced > Components — Health
- * stays a clean "is everything green?" surface.
+ * Daemon row — every row exposes Logs directly and a 3-dot menu with the
+ * status-aware lifecycle actions (start / stop / restart). "Missing" units
+ * have no menu since there's nothing to act on.
  */
 function DaemonRow({
   component,
@@ -252,29 +254,67 @@ function DaemonRow({
 }) {
   const presentation = daemonStatusPresentation(component.status);
   const { showToast } = useToast();
-  const [fixing, setFixing] = useState(false);
+  const [acting, setActing] = useState<ComponentAction | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
 
-  const isBroken =
-    component.status === "failed" || component.status === "inactive";
-
-  const fix = async () => {
-    if (fixing) return;
-    setFixing(true);
+  const run = async (action: ComponentAction) => {
+    if (acting) return;
+    setActing(action);
     try {
-      await mailAdminApi.components.action(serverId, component.key, "restart");
-      showToast(`${component.label} restarted`, "success");
+      await mailAdminApi.components.action(serverId, component.key, action);
+      showToast(`${component.label} ${actionPastTense(action)}`, "success");
       await onActed();
     } catch (err) {
       showToast(
-        err instanceof Error ? err.message : `Restart failed`,
+        err instanceof Error ? err.message : `${action} failed`,
         "error",
-        `${component.label} restart failed`,
+        `${component.label} ${action} failed`,
       );
     } finally {
-      setFixing(false);
+      setActing(null);
     }
   };
+
+  const menuActions: MenuAction[] = (() => {
+    if (component.status === "missing") return [];
+    const items: MenuAction[] = [];
+    const isRunning =
+      component.status === "active" || component.status === "activating";
+    if (isRunning) {
+      items.push({
+        id: "restart",
+        label: acting === "restart" ? "Restarting…" : "Restart",
+        icon: <RotateCw className="size-4" strokeWidth={2.25} />,
+        onClick: () => void run("restart"),
+        disabled: acting !== null,
+      });
+      items.push({
+        id: "stop",
+        label: acting === "stop" ? "Stopping…" : "Stop",
+        icon: <Square className="size-4" strokeWidth={2.25} />,
+        onClick: () => void run("stop"),
+        disabled: acting !== null,
+        variant: "danger",
+      });
+    } else {
+      items.push({
+        id: "start",
+        label: acting === "start" ? "Starting…" : "Start",
+        icon: <Play className="size-4" strokeWidth={2.25} />,
+        onClick: () => void run("start"),
+        disabled: acting !== null,
+        variant: "success",
+      });
+      items.push({
+        id: "restart",
+        label: acting === "restart" ? "Restarting…" : "Restart",
+        icon: <RotateCw className="size-4" strokeWidth={2.25} />,
+        onClick: () => void run("restart"),
+        disabled: acting !== null,
+      });
+    }
+    return items;
+  })();
 
   return (
     <>
@@ -308,33 +348,30 @@ function DaemonRow({
         <StatusPill tone={presentation.tone} icon={presentation.PillIcon}>
           {presentation.label}
         </StatusPill>
-        {isBroken && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => setLogsOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] font-medium rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-              title="Open logs"
-            >
-              <ScrollText className="size-3.5" strokeWidth={2.25} />
-              Logs
-            </button>
-            <button
-              type="button"
-              onClick={fix}
-              disabled={fixing}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] font-medium rounded-md bg-foreground text-background hover:bg-foreground/90 transition-colors disabled:opacity-60"
-              title="Restart this daemon"
-            >
-              {fixing ? (
-                <Loader2 className="size-3.5 animate-spin" strokeWidth={2.25} />
-              ) : (
-                <RotateCw className="size-3.5" strokeWidth={2.25} />
-              )}
-              {fixing ? "Fixing…" : "Fix"}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setLogsOpen(true)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] font-medium rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            title="Open logs"
+          >
+            <ScrollText className="size-3.5" strokeWidth={2.25} />
+            Logs
+          </button>
+          {menuActions.length > 0 && (
+            <DropdownMenu
+              actions={menuActions}
+              align="right"
+              disabled={acting !== null}
+              triggerClassName="inline-flex items-center justify-center w-8 h-8 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-60"
+              trigger={
+                acting ? (
+                  <Loader2 className="size-3.5 animate-spin" strokeWidth={2.25} />
+                ) : undefined
+              }
+            />
+          )}
+        </div>
       </div>
       {logsOpen && (
         <LogsDrawer
@@ -347,6 +384,17 @@ function DaemonRow({
       )}
     </>
   );
+}
+
+function actionPastTense(action: ComponentAction): string {
+  switch (action) {
+    case "start":
+      return "started";
+    case "stop":
+      return "stopped";
+    case "restart":
+      return "restarted";
+  }
 }
 
 function DnsCheckRow({ check }: { check: DnsCheck }) {

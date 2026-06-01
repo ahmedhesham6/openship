@@ -84,6 +84,11 @@ const DeployRepository: React.FC = () => {
     // Only desktop gets step 1. Non-desktop skips straight to config.
     const [step, setStep] = useState<"target" | "config">(isDesktop ? "target" : "config");
 
+    // Track whether the user explicitly came back to step 1 via the edit
+    // affordance. If they did, we must NOT auto-skip past it again — they
+    // came here to make a change. Reset to true only on initial mount.
+    const autoSkipTargetRef = useRef(true);
+
     useEffect(() => {
         const initialize = async () => {
             if (hasInitialized.current || !slug) return;
@@ -174,7 +179,11 @@ const DeployRepository: React.FC = () => {
                 {step === "target" && isDesktop && (
                     <div className="flex items-center justify-center min-h-[calc(100vh-8rem)]">
                         <div className="w-full max-w-lg">
-                            <DeployTargetStep targets={targets} onContinue={() => setStep("config")} />
+                            <DeployTargetStep
+                                targets={targets}
+                                autoSkipAllowed={autoSkipTargetRef.current}
+                                onContinue={() => setStep("config")}
+                            />
                         </div>
                     </div>
                 )}
@@ -195,7 +204,12 @@ const DeployRepository: React.FC = () => {
                                            targets.servers.find((s) => s.id === config.serverId)?.sshHost ?? null)
                                         : null
                                     }
-                                    onEdit={() => setStep("target")}
+                                    onEdit={() => {
+                                        // User explicitly came back to change something — don't
+                                        // auto-skip them past the picker again.
+                                        autoSkipTargetRef.current = false;
+                                        setStep("target");
+                                    }}
                                 />
                             )}
 

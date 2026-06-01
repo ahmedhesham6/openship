@@ -110,16 +110,18 @@ async function persistWebmailBlock(
  */
 async function readExistingWebmailBlock(
   mailServerId: string,
-): Promise<MailWebmailState | null> {
+): Promise<{ block: MailWebmailState | null; installDomain: string | null }> {
   try {
     let block: MailWebmailState | null = null;
+    let installDomain: string | null = null;
     await sshManager.withExecutor(mailServerId, async (exec) => {
       const state = await readState(exec);
       block = state?.webmail ?? null;
+      installDomain = state?.domain ?? null;
     });
-    return block;
+    return { block, installDomain };
   } catch {
-    return null;
+    return { block: null, installDomain: null };
   }
 }
 
@@ -355,7 +357,18 @@ export async function startWebmailDeploy(
   //       moment the bun process surfaces. `installed` stays false until
   //       the deploy success hook flips it. Reuse an existing
   //       sessionEncryptionKey when redeploying so sessions survive. ───
-  const existingState = await readExistingWebmailBlock(input.mailServerId);
+  const { block: existingState, installDomain: mailInstallDomain } =
+    await readExistingWebmailBlock(input.mailServerId);
+  if (!mailInstallDomain) {
+    // Without the mail VPS's install domain we can't tell Zero where IMAP /
+    // SMTP live, and every webmail sign-in would fall back to
+    // `mail.<userDomain>` — broken for additional domains, and a TLS-cert
+    // mismatch for any user whose domain isn't the install one. Fail fast
+    // here rather than ship a webmail that can't authenticate anyone.
+    throw new Error(
+      "Mail server install state is missing — finish the mail install before deploying webmail.",
+    );
+  }
   const brandingToken =
     existingState?.brandingToken ?? randomBytes(32).toString("hex");
   const sessionEncryptionKey =
@@ -385,6 +398,18 @@ export async function startWebmailDeploy(
   //       caller-supplied vars. Vite bakes VITE_PUBLIC_* at build time;
   //       the server reads the non-prefixed PUBLIC_* names at runtime.
   //       ACME_EMAIL is read by the SSL feature installer. ─────────────
+  // IMAP / SMTP coordinates Zero uses to authenticate every sign-in.
+  // Without these, `session.defaultMailHosts` falls back to
+  // `mail.<userDomain>` per email, which:
+  //   - silently breaks for any additional domain the operator added
+  //     (we never publish A/AAAA for `mail.<additionalDomain>`), and
+  //   - relies on `mail.<installDomain>` happening to resolve from
+  //     Zero's host, which isn't guaranteed when Zero runs on the
+  //     orchestrator and the mail VPS is a separate host.
+  // Pinning to `mail.<installDomain>:993/465` here makes every user's
+  // login route to the actual MTA, matching what `test-email.service.ts`
+  // and `mail-credentials.service.ts` already use server-side.
+  const mailHost = `mail.${mailInstallDomain}`;
   const plainEnvMap: Record<string, string> = {
     PORT: String(internalPort),
     HOST: "127.0.0.1",
@@ -398,6 +423,10 @@ export async function startWebmailDeploy(
     SQLITE_PATH: REMOTE_SQLITE_PATH,
     BRANDING_PATH: REMOTE_BRANDING_DIR,
     BRANDING_ADMIN_TOKEN: brandingToken,
+    DEFAULT_IMAP_HOST: mailHost,
+    DEFAULT_IMAP_PORT: "993",
+    DEFAULT_SMTP_HOST: mailHost,
+    DEFAULT_SMTP_PORT: "465",
     VITE_PUBLIC_BACKEND_URL: publicOrigin,
     VITE_PUBLIC_APP_URL: publicOrigin,
     ACME_EMAIL: deriveAcmeEmail(input.hostname),

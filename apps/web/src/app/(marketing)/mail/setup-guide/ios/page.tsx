@@ -16,11 +16,11 @@ export default function IosGuidePage() {
       subtitle="Add your mailbox to Apple's built-in Mail app on iPhone, iPad, or Mac. The flow is identical on all three; screenshots assume iPhone."
     >
       <GuideSection title="Before you start">
-        <p className="text-sm text-muted-foreground leading-relaxed">
-          You need the username and password from the Overview tab, plus the
-          IMAP / SMTP host and port shown in the right rail. iOS will auto-fill
-          some fields after you enter your email — double-check them against
-          the values here before tapping Done.
+        <p className="text-sm leading-relaxed text-white/70">
+          You need the username and password from your Openship admin Overview tab,
+          plus the IMAP / SMTP host and port shown in the right rail. iOS will
+          auto-fill some fields after you enter your email — double-check them
+          against the values here before tapping Done.
         </p>
       </GuideSection>
 

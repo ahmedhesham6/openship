@@ -137,9 +137,36 @@ export const projectsApi = {
       body,
     ),
 
-  /** Delete a project app or a single environment */
-  delete: (id: string | number, body: { deleteApp?: boolean } = {}) =>
-    api.post<any>(endpoints.projects.delete(id), body),
+  /** Delete a project app or a single environment.
+   *  `wipeVolumes=true` ALSO removes Docker named volumes attached to the
+   *  project's containers — destroys persistent data (DBs, caches, etc.).
+   *  Default is false: data survives so the user can recover. */
+  delete: (
+    id: string | number,
+    body: { deleteApp?: boolean; wipeVolumes?: boolean } = {},
+  ) => api.post<any>(endpoints.projects.delete(id), body),
+
+  /** Read-only snapshot of what `delete(id)` will remove — services and their
+   *  named volumes, project networks. Cheap, safe to call on modal open. */
+  deletionPreview: (id: string | number) =>
+    api.get<{
+      success: boolean;
+      preview: {
+        projectId: string;
+        projectName: string;
+        selfHosted: boolean;
+        services: Array<{
+          id: string;
+          name: string;
+          image: string | null;
+          volumes: string[];
+          hasContainer: boolean;
+        }>;
+        deploymentVolumes: string[];
+        networks: string[];
+        totalVolumes: number;
+      };
+    }>(`${endpoints.projects.item(id)}/deletion-preview`),
 
   /** Update name or description */
   update: (id: string | number, action: string, value: string) =>

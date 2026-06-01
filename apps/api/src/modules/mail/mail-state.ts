@@ -119,6 +119,18 @@ export interface AdditionalDomainDns {
   acknowledgedAt: string | null;
   /** ISO timestamp the domain was added through the admin panel. */
   createdAt: string;
+  /**
+   * Plaintext password for `postmaster@<domain>`, auto-generated when the
+   * domain is added through the admin panel. iRedMail's installer creates
+   * the postmaster for the primary install (we keep that password in
+   * `secrets.DOMAIN_ADMIN_PASSWD_PLAIN`); for additional domains we
+   * mirror that behavior so every domain has a working SMTP-Auth account
+   * out of the box — the welcome test-email and any future
+   * orchestrator-driven sending both rely on it. State file lives at
+   * `/root/.openship-mail-state.json` with root-only permissions, same
+   * blast radius as `/etc/dovecot/dovecot-sql.conf`.
+   */
+  postmasterPassword?: string;
 }
 
 /** Single line of streamed output. Shape mirrors what the SSE event carries. */

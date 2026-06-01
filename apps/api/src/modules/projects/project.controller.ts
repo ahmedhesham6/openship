@@ -224,8 +224,30 @@ export async function remove(c: Context) {
   const userId = getUserId(c);
   const id = param(c, "id");
   const deleteApp = c.req.query("deleteApp") !== "false";
-  const result = await projectService.deleteProject(id, userId, { deleteApp });
+  // Allow opting in to volume wipe via either query string or JSON body —
+  // the dashboard sends a body, but query is handy for tooling.
+  let bodyWipeVolumes: boolean | undefined;
+  try {
+    const body = await c.req.json<{ wipeVolumes?: boolean }>();
+    bodyWipeVolumes = body?.wipeVolumes;
+  } catch {
+    /* no body — fine */
+  }
+  const wipeVolumes = bodyWipeVolumes ?? c.req.query("wipeVolumes") === "true";
+  const result = await projectService.deleteProject(id, userId, { deleteApp, wipeVolumes });
   return c.json({ message: "deleted", ...result });
+}
+
+export async function deletionPreview(c: Context) {
+  const userId = getUserId(c);
+  const id = param(c, "id");
+  const { repos } = await import("@repo/db");
+  const project = await repos.project.findById(id);
+  if (!project || project.userId !== userId) {
+    return c.json({ success: false, error: "project-not-found" }, 404);
+  }
+  const preview = await projectService.previewProjectDeletion(project);
+  return c.json({ success: true, preview });
 }
 
 // ─── Environment variables ───────────────────────────────────────────────────
@@ -1278,13 +1300,16 @@ export async function deletePost(c: Context) {
   const userId = getUserId(c);
   const id = param(c, "id");
   let deleteApp = true;
+  let wipeVolumes = false;
   try {
-    const body = await c.req.json<{ deleteApp?: boolean }>();
+    const body = await c.req.json<{ deleteApp?: boolean; wipeVolumes?: boolean }>();
     deleteApp = body.deleteApp ?? true;
+    wipeVolumes = body.wipeVolumes ?? false;
   } catch {
-    // Old clients sent no body. Treat that as deleting the full app group.
+    // Old clients sent no body. Treat that as deleting the full app group
+    // and NOT wiping volumes (safer default — user must opt in).
   }
-  const result = await projectService.deleteProject(id, userId, { deleteApp });
+  const result = await projectService.deleteProject(id, userId, { deleteApp, wipeVolumes });
   return c.json({ success: true, message: "deleted", ...result });
 }
 

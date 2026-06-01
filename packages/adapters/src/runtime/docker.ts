@@ -638,6 +638,36 @@ export class DockerRuntime implements RuntimeAdapter {
     await container.remove({ force: true });
   }
 
+  /**
+   * Inspect a container and return the names of its **named** volumes —
+   * the ones that survive `container.remove()` and would otherwise leak.
+   * Anonymous volumes are auto-removed with `{ v: true }` and don't need to
+   * be enumerated. Bind mounts and tmpfs are skipped (the user manages them
+   * outside our control). Returns [] if the container is already gone.
+   */
+  async inspectNamedVolumes(containerId: string): Promise<string[]> {
+    try {
+      const container = this.docker.getContainer(containerId);
+      const data = await container.inspect();
+      const mounts = (data.Mounts ?? []) as Array<{ Type?: string; Name?: string }>;
+      return mounts
+        .filter((m) => m.Type === "volume" && typeof m.Name === "string" && m.Name.length > 0)
+        .map((m) => m.Name as string);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Remove a named volume by name. Best-effort — already-gone is fine. */
+  async removeVolume(name: string): Promise<void> {
+    try {
+      const volume = this.docker.getVolume(name);
+      await volume.remove({ force: true });
+    } catch {
+      // Already removed, in-use elsewhere, or doesn't exist.
+    }
+  }
+
   // ── Observability ──────────────────────────────────────────────────────
 
   async getContainerInfo(containerId: string): Promise<ContainerInfo> {

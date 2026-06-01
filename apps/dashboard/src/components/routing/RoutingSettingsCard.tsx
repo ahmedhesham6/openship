@@ -175,6 +175,7 @@ export function RoutingSettingsCard({
             </span>
           </div>
           <button
+            type="button"
             onClick={() => void onExposedChange(!visible)}
             disabled={disabled}
             className={`relative rounded-full transition-colors duration-200 ${visible ? "bg-blue-500" : "bg-muted-foreground/20"}`}
@@ -229,6 +230,7 @@ export function RoutingSettingsCard({
                 </div>
                 {saveMode === "explicit" && draftDomain !== domain && (
                   <button
+                    type="button"
                     onClick={commitFreeDomain}
                     disabled={disabled}
                     className="px-3 py-2 rounded-2xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
@@ -258,6 +260,7 @@ export function RoutingSettingsCard({
                 </div>
                 {saveMode === "explicit" && draftCustomDomain !== customDomain && (
                   <button
+                    type="button"
                     onClick={commitCustomDomain}
                     disabled={disabled}
                     className="px-3 py-2 rounded-2xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
@@ -336,6 +339,7 @@ export function RoutingSettingsCard({
               )}
               {saveMode === "explicit" && draftPort !== (exposedPort ?? "") && (
                 <button
+                  type="button"
                   onClick={commitPort}
                   disabled={disabled}
                   className="px-3 py-2 rounded-xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
@@ -387,6 +391,7 @@ export function RoutingSettingsCard({
                   />
                   {saveMode === "explicit" && draftTargetPath !== (targetPath ?? "/") && (
                     <button
+                      type="button"
                       onClick={commitTargetPath}
                       disabled={disabled}
                       className="px-3 py-2 rounded-xl text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"

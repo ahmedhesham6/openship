@@ -18,6 +18,7 @@ import { healthRoutes } from "./modules/health/health.routes";
 import { githubRoutes } from "./modules/github";
 import * as githubAuth from "./modules/github/github.auth";
 import { settingsRoutes } from "./modules/settings/settings.routes";
+import { imageRoutes } from "./modules/images/images.routes";
 
 /* ---------- Initialize platform (runtime + infra + system) ---------- */
 await bootstrapPlatform();
@@ -49,6 +50,7 @@ app.route("/api/github", githubRoutes);
 app.route("/api/analytics", analyticsRoutes);
 app.route("/api/settings", settingsRoutes);
 app.route("/api/billing", billingPlansRoutes);
+app.route("/api/images", imageRoutes);
 
 /* ---------- OAuth callback landing pages ---------- */
 const authCallbackHtml = `<!DOCTYPE html><html><head><title>Success</title></head><body><script>window.close();</script><p>Authentication successful. You can close this window.</p></body></html>`;

@@ -25,7 +25,7 @@ export type DashboardRuntimeTargetId = (typeof DASHBOARD_RUNTIME_TARGET_IDS)[num
 export const CLOUD_RUNTIME_TARGET_ID = "cloud-saas" satisfies DashboardRuntimeTargetId;
 export const CURRENT_SELF_HOSTED_RUNTIME_TARGET_ID = "local" satisfies DashboardRuntimeTargetId;
 // Change this to "cloud-saas" when SaaS mode should use app/api.openship.io.
-export const CURRENT_SAAS_RUNTIME_TARGET_ID = "local-saas" satisfies DashboardRuntimeTargetId;
+export const CURRENT_SAAS_RUNTIME_TARGET_ID = "cloud-saas" satisfies DashboardRuntimeTargetId;
 
 export type DashboardRuntimeTarget = {
   id: DashboardRuntimeTargetId;

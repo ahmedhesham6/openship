@@ -11,11 +11,41 @@ import { STACKS, type StackId, type StackDefinition } from "@repo/core";
 import type { BuildStrategy } from "@repo/adapters";
 
 export type BuildMode = "auto" | "server" | "local";
+export type DefaultDeployTarget = "local" | "server" | "cloud";
+
+const VALID_DEPLOY_TARGETS: DefaultDeployTarget[] = ["local", "server", "cloud"];
+
+export function isValidDefaultDeployTarget(value: unknown): value is DefaultDeployTarget {
+  return typeof value === "string" && (VALID_DEPLOY_TARGETS as string[]).includes(value);
+}
 
 /** Get the user's build mode preference (defaults to "auto" if no row exists) */
 export async function getBuildMode(userId: string): Promise<BuildMode> {
   const settings = await repos.settings.findByUser(userId);
   return (settings?.buildMode as BuildMode) ?? "auto";
+}
+
+/**
+ * Resolve the user's default deploy target + server id.
+ *
+ * Returns nulls when the user has no preference yet. Callers in the dashboard
+ * use this to seed the deploy picker; an explicit per-deploy choice still
+ * wins and is never written back unless the user opts in.
+ *
+ * Note: server id is returned verbatim. The dashboard verifies it against the
+ * current server list before honoring it — if the server has been deleted,
+ * the stale default is silently ignored on the next deploy.
+ */
+export async function getDeployDefaults(userId: string): Promise<{
+  defaultDeployTarget: DefaultDeployTarget | null;
+  defaultServerId: string | null;
+}> {
+  const settings = await repos.settings.findByUser(userId);
+  const raw = settings?.defaultDeployTarget ?? null;
+  return {
+    defaultDeployTarget: isValidDefaultDeployTarget(raw) ? raw : null,
+    defaultServerId: settings?.defaultServerId ?? null,
+  };
 }
 
 /**

@@ -13,7 +13,7 @@
 
 import { sshManager } from "../../../lib/ssh-manager";
 import { readState } from "../mail-state";
-import { provisionDomainDkim } from "../mail.service";
+import { provisionDomainDkim, genSecret } from "../mail.service";
 import { execute, queryOne, queryRows, q, qInt } from "./psql-runner";
 import {
   buildDomainDnsRecords,
@@ -147,34 +147,85 @@ export async function createDomain(
   // DKIM provisioning is best-effort: if it fails, we still record the
   // MX/SPF/DMARC banner so the operator can publish those, and the
   // dnsWarning toast tells them what to fix.
+  // Auto-create the postmaster mailbox for the new domain. iRedMail's
+  // installer creates postmaster for the primary install; we mirror that
+  // behavior so every added domain has a working SMTP-Auth identity out
+  // of the box — needed for DKIM/SPF alignment when sending AS the new
+  // domain, and read by the welcome test-email flow after the operator
+  // acks the DNS banner.
+  //
+  // Dynamic import: mailboxes.service imports `recountDomain` from us,
+  // so a static reverse-import would form a load-time cycle. Same
+  // pattern used in `deleteDomain` below.
+  let postmasterPassword: string | undefined;
+  try {
+    postmasterPassword = genSecret(18);
+    const { createMailbox } = await import("./mailboxes.service");
+    await createMailbox(serverId, {
+      localPart: "postmaster",
+      domain,
+      password: postmasterPassword,
+      name: "Postmaster",
+    });
+  } catch (err) {
+    console.warn(
+      `createDomain: postmaster mailbox creation failed for ${domain}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    postmasterPassword = undefined;
+  }
+
   let dnsWarning: string | undefined;
   try {
-    const { installDomain, dkimValue, dkimError } = await sshManager.withExecutor(
-      serverId,
-      async (exec) => {
+    const { installDomain, dkimValue, dkimError, ipv4, ipv6 } =
+      await sshManager.withExecutor(serverId, async (exec) => {
         const state = await readState(exec);
         const installDomain = state?.domain ?? null;
+        // Pull the same IPs step 11 detected for the primary install so
+        // additional domains publish identical SPF shape: `mx ip4:… ip6:… -all`.
+        // Falling back to mx-only SPF (no IPs) still passes, but the explicit
+        // IPs make receivers skip an MX→A lookup and stay aligned during
+        // brief MX-resolution hiccups.
+        const records = (state?.dnsRecords ?? null) as Record<
+          string,
+          { value?: string } | undefined
+        > | null;
+        const ipv4 = typeof records?.a?.value === "string" ? records.a.value : null;
+        const ipv6 =
+          typeof records?.aaaa?.value === "string" ? records.aaaa.value : null;
         if (!installDomain) {
-          return { installDomain: null, dkimValue: undefined, dkimError: undefined };
+          return {
+            installDomain: null,
+            dkimValue: undefined,
+            dkimError: undefined,
+            ipv4,
+            ipv6,
+          };
         }
         try {
           const dkimValue = await provisionDomainDkim(exec, domain);
-          return { installDomain, dkimValue, dkimError: undefined };
+          return { installDomain, dkimValue, dkimError: undefined, ipv4, ipv6 };
         } catch (err) {
           return {
             installDomain,
             dkimValue: undefined,
             dkimError: err instanceof Error ? err.message : String(err),
+            ipv4,
+            ipv6,
           };
         }
-      },
-    );
+      });
     if (!installDomain) {
       dnsWarning =
         "Mail state file is missing the primary install domain — DNS records for the new domain were not generated. Re-run the mail install or contact support.";
     } else {
-      const records = buildDomainDnsRecords(installDomain, domain, dkimValue);
-      await recordDomainDns(serverId, domain, records);
+      const records = buildDomainDnsRecords(
+        installDomain,
+        domain,
+        dkimValue,
+        ipv4,
+        ipv6,
+      );
+      await recordDomainDns(serverId, domain, records, postmasterPassword);
       if (dkimError) {
         dnsWarning = `Domain added, but DKIM provisioning failed: ${dkimError}. MX/SPF/DMARC records are still in the banner — DKIM can be added later.`;
       }

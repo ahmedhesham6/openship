@@ -16,18 +16,18 @@ export default function DesktopGuidePage() {
       subtitle="Thunderbird, Outlook, Apple Mail (covered separately), Spark, K-9 — the IMAP/SMTP setup is identical. This guide uses Thunderbird; the field names match almost every other client."
     >
       <GuideSection title="Universal settings">
-        <p className="text-sm text-muted-foreground leading-relaxed">
+        <p className="text-sm leading-relaxed text-white/70">
           Every mail client asks for the same six things. They're all in the
           right rail — copy them as you go:
         </p>
         <Callout>
-          <ul className="list-disc list-inside space-y-1 text-sm">
+          <ul className="list-inside list-disc space-y-1 text-sm">
             <li>
               <strong>Username</strong> — your full email address (same on
               both servers).
             </li>
             <li>
-              <strong>Password</strong> — from the Overview tab.
+              <strong>Password</strong> — from your Openship admin Overview tab.
             </li>
             <li>
               <strong>IMAP server / port / security</strong> — typically port{" "}
@@ -96,7 +96,7 @@ export default function DesktopGuidePage() {
       </GuideSection>
 
       <GuideSection title="K-9 / Spark / FairEmail (open-source clients)">
-        <p className="text-sm text-muted-foreground leading-relaxed">
+        <p className="text-sm leading-relaxed text-white/70">
           The flow is the same on every other IMAP client: when asked,
           choose <strong>Manual setup</strong> → <strong>IMAP</strong>,
           fill the values from the right rail, and avoid any "OAuth" or

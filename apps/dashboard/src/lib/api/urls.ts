@@ -1,4 +1,4 @@
-import { DASHBOARD_RUNTIME_TARGETS } from "@repo/core";
+import { DASHBOARD_RUNTIME_TARGETS, DEFAULT_PORT } from "@repo/core";
 
 type RuntimeTarget = (typeof DASHBOARD_RUNTIME_TARGETS)[number];
 
@@ -227,6 +227,26 @@ export function getCloudApiOrigin(rawUrl?: string) {
   }
 
   return getCloudRuntimeTarget(rawUrl).apiOrigin;
+}
+
+/**
+ * Origin of the public marketing site (the `apps/web` Next app), where
+ * shareable docs and setup guides live. Pattern, by environment:
+ *   - production: `app.openship.io` (dashboard) → `openship.io` (marketing)
+ *   - SaaS local: `localhost:3002` → `localhost:3000`
+ *   - self-host:  `localhost:3001` → `localhost:3000`
+ * Server-side render falls back to the public origin.
+ */
+export function getMarketingOrigin() {
+  if (typeof window === "undefined") return "https://openship.io";
+  const { protocol, hostname, port } = window.location;
+  if (hostname.startsWith("app.")) {
+    return `${protocol}//${hostname.slice(4)}`;
+  }
+  if (port === String(DEFAULT_PORT.dashboard) || port === String(DEFAULT_PORT.saasDashboard)) {
+    return `${protocol}//${hostname}:${DEFAULT_PORT.web}`;
+  }
+  return "https://openship.io";
 }
 
 export function getFallbackDeploymentInfo(rawUrl?: string) {

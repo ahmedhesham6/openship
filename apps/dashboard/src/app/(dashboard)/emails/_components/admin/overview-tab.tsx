@@ -9,7 +9,11 @@
  *                            details →" link to the Advanced tab. Webmail
  *                            is bundled with openship, so it's always
  *                            available — no deploy gate needed.
- *   2. Setup guides       — 4-up banner that routes to /emails/setup-guides.
+ *   2. Setup guides       — 4-up banner that deep-links to the public
+ *                            walkthroughs on /mail/setup-guide/<client> in
+ *                            a new tab. Server settings stay in this tab
+ *                            (Postmaster credentials / Advanced); the
+ *                            guides are pure content.
  *
  * Right column (340px, sticky):
  *   1. Mail stats         — domain/mailbox/alias/storage/message counts.
@@ -31,7 +35,6 @@ import {
   ArrowRight,
   ArrowUpRight,
   Check,
-  ChevronRight,
   Code2,
   Copy,
   Globe,
@@ -51,6 +54,7 @@ import {
   type MailSetupStatus,
   type MailWebmailSummary,
 } from "@/lib/api";
+import { getMarketingOrigin } from "@/lib/api/urls";
 import { Skeleton } from "./_shared/skeleton";
 
 interface OverviewTabProps {
@@ -71,7 +75,7 @@ export function OverviewTab({ status, serverId }: OverviewTabProps) {
           serverId={serverId}
           webmail={status.webmail}
         />
-        <SetupGuidesBanner serverId={serverId} />
+        <SetupGuidesBanner />
       </div>
 
       <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
@@ -199,9 +203,9 @@ function MailServerCard({
 
 // ─── Setup guides banner ─────────────────────────────────────────────────────
 
-function SetupGuidesBanner({ serverId }: { serverId: string }) {
-  const baseHref = `/emails/setup-guides`;
-  const qs = `?serverId=${encodeURIComponent(serverId)}`;
+function SetupGuidesBanner() {
+  const guideHref = (client: string) =>
+    `${getMarketingOrigin()}/mail/setup-guide/${client}`;
 
   return (
     <div className="bg-gradient-to-br from-primary/5 via-primary/3 to-transparent rounded-2xl border border-primary/15 p-5">
@@ -211,30 +215,30 @@ function SetupGuidesBanner({ serverId }: { serverId: string }) {
       </div>
       <p className="text-sm text-muted-foreground leading-relaxed mb-4">
         Step-by-step walkthroughs for every common way to use this mailbox —
-        from your phone to your codebase.
+        from your phone to your codebase. Opens in a new tab.
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
         <GuideCard
-          href={`${baseHref}/ios${qs}`}
+          href={guideHref("ios")}
           icon={Apple}
           title="iOS & macOS Mail"
           subtitle="Add as IMAP on iPhone / iPad / Mac"
         />
         <GuideCard
-          href={`${baseHref}/android${qs}`}
+          href={guideHref("android")}
           icon={Smartphone}
           title="Android Gmail app"
           subtitle="Add as a third-party IMAP account"
         />
         <GuideCard
-          href={`${baseHref}/desktop${qs}`}
+          href={guideHref("desktop")}
           icon={Mail}
           title="Desktop clients"
           subtitle="Thunderbird, Outlook, Spark, K-9"
         />
         <GuideCard
-          href={`${baseHref}/nodemailer${qs}`}
+          href={guideHref("nodemailer")}
           icon={Code2}
           title="Send via code"
           subtitle="Node.js, Python, anywhere SMTP works"
@@ -256,8 +260,10 @@ function GuideCard({
   subtitle: string;
 }) {
   return (
-    <Link
+    <a
       href={href}
+      target="_blank"
+      rel="noopener noreferrer"
       className="flex items-center gap-3 px-4 py-3 rounded-xl bg-card border border-border/50 hover:bg-muted/40 hover:border-border transition-all group"
     >
       <div className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
@@ -267,8 +273,8 @@ function GuideCard({
         <p className="text-sm font-medium text-foreground truncate">{title}</p>
         <p className="text-xs text-muted-foreground truncate mt-0.5">{subtitle}</p>
       </div>
-      <ChevronRight className="size-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors shrink-0" />
-    </Link>
+      <ArrowUpRight className="size-4 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors shrink-0" />
+    </a>
   );
 }
 

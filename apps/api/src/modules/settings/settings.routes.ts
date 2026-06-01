@@ -23,3 +23,6 @@ settingsRoutes.put("/", ctrl.upsert);
 
 /** PATCH /build-mode — update only build mode preference */
 settingsRoutes.patch("/build-mode", ctrl.updateBuildMode);
+
+/** PATCH /deploy-defaults — set/clear the default deploy target + server */
+settingsRoutes.patch("/deploy-defaults", ctrl.updateDeployDefaults);

@@ -28,6 +28,8 @@ export function createSettingsRepo(db: Database) {
           set: {
             buildMode: data.buildMode,
             cloudSessionToken: data.cloudSessionToken,
+            defaultDeployTarget: data.defaultDeployTarget,
+            defaultServerId: data.defaultServerId,
             updatedAt: new Date(),
           },
         })

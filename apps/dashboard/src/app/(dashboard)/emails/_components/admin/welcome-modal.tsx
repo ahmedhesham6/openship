@@ -21,6 +21,13 @@ import { mailAdminApi } from "@/lib/api";
 
 interface WelcomeModalProps {
   serverId: string;
+  /**
+   * Domain to send the welcome test FROM. The server authenticates as
+   * `postmaster@<domain>` using the credential it stored when this domain
+   * was provisioned (install postmaster lives in `state.secrets`; additional
+   * domains live in `state.additionalDomains[domain].postmasterPassword`).
+   * Surfaced as copy in the headline / "sent from" line.
+   */
   domain: string;
   onClose: () => void;
 }
@@ -60,7 +67,7 @@ export function WelcomeModal({ serverId, domain, onClose }: WelcomeModalProps) {
     setError(null);
     setSending(true);
     try {
-      await mailAdminApi.testEmail.send(serverId, v);
+      await mailAdminApi.testEmail.send(serverId, v, domain);
       setStage("sent");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send");

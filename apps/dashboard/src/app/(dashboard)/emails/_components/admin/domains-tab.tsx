@@ -31,6 +31,12 @@ import {
 import { useToast } from "@/context/ToastContext";
 import type { DnsRecords } from "@/lib/api";
 import { DnsHoldBanner } from "../dns-hold-banner";
+import {
+  ReputationBanner,
+  REPUTATION_STORAGE_PREFIX,
+  reputationStorageKey,
+} from "./reputation-banner";
+import { WelcomeModal } from "./welcome-modal";
 
 interface DomainsTabProps {
   serverId: string;
@@ -55,13 +61,45 @@ export function DomainsTab({
   const [error, setError] = useState<string | null>(null);
   const [pendingDns, setPendingDns] = useState<AdditionalDomainDnsState[]>([]);
   const [acknowledging, setAcknowledging] = useState<string | null>(null);
+  // Additional domains currently in their 7-day reputation warm-up window.
+  // Seeded from localStorage on mount and updated whenever the operator
+  // acks a new domain. Excludes the primary install — its banner lives at
+  // the admin-panel level.
+  const [warmupDomains, setWarmupDomains] = useState<string[]>([]);
+  // The additional domain (if any) whose welcome / test-email modal is
+  // currently open. Set right after the operator acks the DNS banner so
+  // the modal can fire a real test FROM the freshly-published domain —
+  // proving MX/SPF/DKIM/DMARC end-to-end against the records they just
+  // pasted into their provider.
+  const [welcomeFor, setWelcomeFor] = useState<string | null>(null);
 
   const acknowledgeDomain = useCallback(
     async (domain: string) => {
       setAcknowledging(domain);
       try {
         await mailAdminApi.domains.acknowledgeDns(serverId, domain);
+        // Seed the reputation warm-up clock for this domain right now —
+        // ack is when the domain effectively starts sending. Banner picks
+        // it up on next mount of <ReputationBanner /> for this domain.
+        if (typeof window !== "undefined" && domain !== primaryDomain) {
+          const key = reputationStorageKey(serverId, domain);
+          if (!window.localStorage.getItem(key)) {
+            window.localStorage.setItem(
+              key,
+              JSON.stringify({ installedAt: Date.now(), dismissed: false }),
+            );
+          }
+          setWarmupDomains((prev) =>
+            prev.includes(domain) ? prev : [...prev, domain],
+          );
+        }
         await reload();
+        // Open the welcome / test-email modal AS the additional domain.
+        // The primary install's welcome modal already fires from the
+        // install flow at /emails — re-firing it here would be a dupe.
+        if (domain !== primaryDomain) {
+          setWelcomeFor(domain);
+        }
       } catch (err) {
         showToast(
           getApiErrorMessage(err, "Failed to acknowledge DNS records"),
@@ -72,8 +110,40 @@ export function DomainsTab({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [serverId, showToast],
+    [serverId, primaryDomain, showToast],
   );
+
+  // Scan localStorage once on mount to pick up any additional domains
+  // that are still inside their warm-up window (e.g. acked in a previous
+  // session). Filter out dismissed ones and any that have aged out.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const prefix = `${REPUTATION_STORAGE_PREFIX}${serverId}:`;
+    const now = Date.now();
+    const out: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (!k || !k.startsWith(prefix)) continue;
+      const domain = k.slice(prefix.length);
+      if (!domain || domain === primaryDomain) continue;
+      try {
+        const raw = window.localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw) as {
+          installedAt?: number;
+          dismissed?: boolean;
+        };
+        if (parsed.dismissed) continue;
+        if (typeof parsed.installedAt !== "number") continue;
+        const elapsedDays = (now - parsed.installedAt) / (1000 * 60 * 60 * 24);
+        if (elapsedDays >= 7) continue;
+        out.push(domain);
+      } catch {
+        /* ignore malformed entries */
+      }
+    }
+    setWarmupDomains(out);
+  }, [serverId, primaryDomain]);
 
   const reload = useCallback(async () => {
     setError(null);
@@ -141,6 +211,17 @@ export function DomainsTab({
           onCancel={() => hideModal(id)}
           onDeleted={() => {
             hideModal(id);
+            // Clear the per-domain reputation warm-up record from
+            // localStorage and from in-memory state so the banner stops
+            // rendering for a domain that no longer exists. Banner state
+            // lives entirely client-side — the backend already drops the
+            // DNS-pending record inside `deleteDomain`.
+            if (typeof window !== "undefined") {
+              window.localStorage.removeItem(
+                reputationStorageKey(serverId, row.domain),
+              );
+            }
+            setWarmupDomains((prev) => prev.filter((d) => d !== row.domain));
             onDomainDeleted?.(row.domain);
             void reload();
           }}
@@ -284,6 +365,14 @@ export function DomainsTab({
         </div>
       )}
 
+      {warmupDomains.length > 0 && (
+        <div className="space-y-3">
+          {warmupDomains.map((d) => (
+            <ReputationBanner key={d} serverId={serverId} domain={d} />
+          ))}
+        </div>
+      )}
+
       <DataTable
         columns={columns}
         rows={rows}
@@ -321,6 +410,14 @@ export function DomainsTab({
           ),
         }}
       />
+
+      {welcomeFor && (
+        <WelcomeModal
+          serverId={serverId}
+          domain={welcomeFor}
+          onClose={() => setWelcomeFor(null)}
+        />
+      )}
     </div>
   );
 }

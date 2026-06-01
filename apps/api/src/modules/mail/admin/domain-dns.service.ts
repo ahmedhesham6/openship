@@ -23,6 +23,7 @@
 import { sshManager } from "../../../lib/ssh-manager";
 import { readState, writeState, type MailServerState } from "../mail-state";
 import type { DnsRecordSet, AdditionalDomainDns } from "../mail-state";
+import { buildSpfValue } from "../mail.service";
 
 // ─── Record set construction ─────────────────────────────────────────────────
 
@@ -35,11 +36,20 @@ import type { DnsRecordSet, AdditionalDomainDns } from "../mail-state";
  * target + SSL cert. DKIM is optional — pass `dkimValue` when amavis has
  * been provisioned with a keypair for `newDomain`; omit it to surface a
  * 3-record banner (MX/SPF/DMARC).
+ *
+ * The optional `ipv4` / `ipv6` are the mail host's public IPs (the same
+ * ones the primary install published as `A`/`AAAA` for `mail.<installDomain>`).
+ * When provided, they're spliced into the SPF record alongside `mx` so
+ * receivers can authorize without an extra MX→A lookup and so a brief
+ * MX-resolution hiccup doesn't drop SPF=pass. The same SPF shape is used
+ * for the primary install in step 11.
  */
 export function buildDomainDnsRecords(
   installDomain: string,
   newDomain: string,
   dkimValue?: string,
+  ipv4?: string | null,
+  ipv6?: string | null,
 ): DnsRecordSet {
   const mailHost = `mail.${installDomain}`;
   return {
@@ -53,7 +63,7 @@ export function buildDomainDnsRecords(
     spf: {
       type: "TXT",
       name: newDomain,
-      value: "v=spf1 mx ~all",
+      value: buildSpfValue(ipv4, ipv6),
       required: true,
     },
     ...(dkimValue && {
@@ -80,11 +90,19 @@ export function buildDomainDnsRecords(
  * on-server state file. Initial state is `acknowledgedAt: null` — the
  * dashboard's banner uses that to keep showing the "publish DNS" prompt
  * until the operator clicks "I've set the records".
+ *
+ * `postmasterPassword` is the auto-generated plaintext for the
+ * `postmaster@<domain>` mailbox `createDomain` provisions at the same
+ * time. The welcome test-email flow reads it to authenticate over SMTP
+ * submission so the test message is sent AS the new domain (DKIM signs,
+ * SPF aligns, DMARC passes). The install domain's equivalent lives in
+ * `secrets.DOMAIN_ADMIN_PASSWD_PLAIN`.
  */
 export async function recordDomainDns(
   serverId: string,
   domain: string,
   records: DnsRecordSet,
+  postmasterPassword?: string,
 ): Promise<void> {
   await sshManager.withExecutor(serverId, async (exec) => {
     const state = await readState(exec);
@@ -99,6 +117,7 @@ export async function recordDomainDns(
         records,
         acknowledgedAt: null,
         createdAt: new Date().toISOString(),
+        ...(postmasterPassword ? { postmasterPassword } : {}),
       },
     };
     const next: MailServerState = { ...state, additionalDomains };

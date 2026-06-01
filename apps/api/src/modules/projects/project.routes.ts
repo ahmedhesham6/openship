@@ -33,6 +33,7 @@ projectRoutes.get("/:id/environments", ctrl.listEnvironments);
 projectRoutes.post("/:id/environments", ctrl.createEnvironment);
 projectRoutes.post("/:id/update", ctrl.updatePost);
 projectRoutes.post("/:id/delete", ctrl.deletePost);
+projectRoutes.get("/:id/deletion-preview", ctrl.deletionPreview);
 
 /* ─── Build options ────────────────────────────────────────────────────── */
 projectRoutes.post("/:id/options", ctrl.setOptions);

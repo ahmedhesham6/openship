@@ -1,0 +1,99 @@
+/**
+ * Image catalog — thin proxy over Oblien `workspaces.images.list`.
+ *
+ * The catalog is global (same images for everyone), so we cache it in
+ * memory for a few minutes. Filtering by `search` / `category` happens
+ * on the Oblien side, so each unique (search, category) tuple gets its
+ * own cache slot.
+ *
+ * Resolution:
+ *  - SaaS instance (CLOUD_MODE=true)  → master Oblien client.
+ *  - Local instance with cloud linked → per-user namespace-scoped token.
+ *  - Local instance without cloud      → throws "cloud-not-connected".
+ *    The dashboard treats that as "show only the Custom image tile".
+ */
+
+import { Oblien } from "@repo/adapters";
+import { env } from "../../config/env";
+import { getOblienClient } from "../../lib/openship-cloud";
+import { getCloudToken } from "../../lib/cloud-client";
+
+export interface ImageCatalogEntry {
+  /** Unique slug, e.g. "postgres" — what the user picks in the catalog */
+  id?: string;
+  /** Display name, e.g. "PostgreSQL" */
+  name?: string;
+  /** Docker image string the service will run with, e.g. "postgres:16-alpine" */
+  image?: string;
+  /** URL to logo / icon (rendered in the catalog grid). May be relative. */
+  logo?: string;
+  /** Short description shown on the card */
+  description?: string;
+  /** Free-form category — "database", "cache", "messaging", etc. */
+  category?: string;
+  /** Tag chips */
+  tags?: string[];
+  /** Default exposed ports (e.g. [5432]) */
+  ports?: number[];
+  /** Suggested env keys with optional default values */
+  defaultEnv?: Array<{ key: string; value?: string; description?: string }>;
+  /** Anything else the Oblien catalog returns — passed through for forward compat. */
+  [key: string]: unknown;
+}
+
+interface CatalogParams {
+  search?: string;
+  category?: string;
+}
+
+interface CacheEntry {
+  expiresAt: number;
+  images: ImageCatalogEntry[];
+}
+
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const cache = new Map<string, CacheEntry>();
+
+function cacheKey(userId: string | "saas", params: CatalogParams): string {
+  return `${userId}::${params.search ?? ""}::${params.category ?? ""}`;
+}
+
+/**
+ * Pick the right Oblien client for the current deployment mode.
+ * Throws "cloud-not-connected" when local-mode user has no cloud link.
+ */
+async function getClientForUser(userId: string): Promise<Oblien> {
+  if (env.CLOUD_MODE) {
+    return getOblienClient();
+  }
+  const tok = await getCloudToken(userId);
+  if (!tok) throw new Error("cloud-not-connected");
+  return new Oblien({ token: tok.token });
+}
+
+function normalizeImages(raw: unknown): ImageCatalogEntry[] {
+  if (!raw || typeof raw !== "object") return [];
+  const obj = raw as Record<string, unknown>;
+  // Common shapes: { data: [...] }, { images: [...] }, or raw [...]
+  const list =
+    Array.isArray(obj.data) ? obj.data :
+    Array.isArray(obj.images) ? obj.images :
+    Array.isArray(raw) ? raw :
+    [];
+  return list.filter((x): x is ImageCatalogEntry => !!x && typeof x === "object");
+}
+
+export async function listImages(userId: string, params: CatalogParams = {}): Promise<ImageCatalogEntry[]> {
+  const key = cacheKey(env.CLOUD_MODE ? "saas" : userId, params);
+  const hit = cache.get(key);
+  if (hit && hit.expiresAt > Date.now()) {
+    return hit.images;
+  }
+
+  const client = await getClientForUser(userId);
+  const response = await client.workspaces.images.list(params);
+  const images = normalizeImages(response);
+
+  cache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, images });
+  return images;
+}

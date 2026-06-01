@@ -7,6 +7,7 @@ import { useCloud } from "@/context/CloudContext";
 import { useToast } from "@/context/ToastContext";
 
 import { BuildPreferences } from "./_components/BuildPreferences";
+import { DeployDefaults } from "./_components/DeployDefaults";
 import { ServerConnection } from "./_components/ServerConnection";
 import { CloudConnection } from "./_components/CloudConnection";
 import { GitHubConnection } from "./_components/GitHubConnection";
@@ -33,6 +34,8 @@ function SettingsPageInner() {
 
   // Build preferences: only self-hosted — SaaS manages builds.
   const showBuildPreferences = selfHosted;
+  // Deploy defaults: only meaningful where the picker exists (desktop / self-hosted)
+  const showDeployDefaults = selfHosted;
   // Server connection (SSH / tunnel) only when self-hosted with local infra
   const showServerConnection = selfHosted && authMode !== "cloud";
   // Cloud connection available for self-hosted instances (connect/disconnect)
@@ -65,6 +68,7 @@ function SettingsPageInner() {
           {/* ── LEFT COLUMN ── */}
           <div className="space-y-6 min-w-0">
             <GitHubConnection />
+            {showDeployDefaults && <DeployDefaults />}
             {showBuildPreferences && <BuildPreferences />}
             {showServerConnection && <ServerConnection />}
             <InstanceInfo />

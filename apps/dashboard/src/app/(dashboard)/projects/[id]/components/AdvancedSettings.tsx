@@ -261,6 +261,7 @@ export const AdvancedSettings = ({ onDeleteProject }: Props) => {
         onClose={() => setShowDeleteModal(false)}
         onConfirm={onDeleteProject}
         projectName={projectData?.name || projectData?.domain}
+        projectId={projectData?.id}
       />
     </div>
   );

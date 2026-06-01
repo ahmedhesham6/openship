@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { usePlatform } from "@/context/PlatformContext";
 import { servicesApi, type Service, type ServiceContainer, type ServiceInput } from "@/lib/api/services";
+import { deployApi } from "@/lib/api/deploy";
 import { useToast } from "@/context/ToastContext";
 import { resolveServiceHostnameLabel } from "@repo/core";
 import { useRouter } from "next/navigation";
@@ -20,7 +21,7 @@ import {
   Zap,
 } from "lucide-react";
 import { ServiceDetailPanel } from "./services/ServiceDetailPanel";
-import { ServiceEditorModal } from "./services/ServiceEditorModal";
+import { AddServiceModal } from "./services/AddServiceModal";
 
 /* ── Main Component ─────────────────────────────────────────────────── */
 
@@ -96,7 +97,34 @@ export const ServicesTab = () => {
     }
 
     await fetchData();
-    showToast("Service added", "success", data.name);
+
+    // Auto-deploy the new service. Without this step `createService` only
+    // saves a DB row — no container actually starts until the next project
+    // deploy. We trigger a redeploy of the project's active deployment so
+    // the user's "Add" gesture really brings the service up.
+    //
+    // If there's no active deployment (brand new project), we surface a
+    // softer message — the user has to do the first deploy themselves.
+    const activeDeploymentId = projectData?.activeDeploymentId;
+    if (activeDeploymentId) {
+      showToast(`${data.name} added — deploying…`, "success", "Service");
+      deployApi
+        .buildRedeploy(activeDeploymentId)
+        .then((res: any) => {
+          if (res?.success === false) {
+            showToast(res?.error || "Deploy failed", "error", data.name);
+            return;
+          }
+          showToast(`${data.name} is starting`, "success", "Service");
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : "Deploy failed";
+          showToast(msg, "error", data.name);
+        });
+    } else {
+      showToast(`${data.name} saved — deploy the project to start it`, "success", "Service");
+    }
+
     if (result.service?.id) {
       router.push(`/projects/${id}/services/${result.service.id}`);
     }
@@ -183,9 +211,8 @@ export const ServicesTab = () => {
             </button>
           </div>
         </div>
-        <ServiceEditorModal
+        <AddServiceModal
           open={createOpen}
-          mode="create"
           projectName={projectSlugBase}
           onClose={() => setCreateOpen(false)}
           onSubmit={handleCreateService}
@@ -319,9 +346,8 @@ export const ServicesTab = () => {
         })}
       </div>
 
-      <ServiceEditorModal
+      <AddServiceModal
         open={createOpen}
-        mode="create"
         projectName={projectSlugBase}
         onClose={() => setCreateOpen(false)}
         onSubmit={handleCreateService}

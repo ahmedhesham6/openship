@@ -124,10 +124,10 @@ export function BrandingTab({ serverId }: Props) {
   if (loadErr) {
     return (
       <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-5 text-sm text-red-600 dark:text-red-400">
-        <div className="font-semibold mb-1">Couldn't reach Zero webmail server</div>
+        <div className="font-semibold mb-1">Couldn't reach the webmail server</div>
         <p className="leading-relaxed">{loadErr}</p>
         <p className="mt-3 text-xs text-muted-foreground">
-          Openship API proxies branding writes to the Zero server. Check
+          Openship API proxies branding writes to the webmail server. Check
           that <code className="font-mono">MAIL_WEBMAIL_URL</code> is set
           and reachable from the API host.
         </p>
@@ -258,7 +258,7 @@ export function BrandingTab({ serverId }: Props) {
 
         <SectionCard icon={ExternalLink} title="Preview">
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Open the Zero webmail's sign-in screen in a new tab. Hard
+            Open the webmail's sign-in screen in a new tab. Hard
             refresh (Cmd+Shift+R) if you saved branding moments ago — the
             client caches the response briefly.
           </p>

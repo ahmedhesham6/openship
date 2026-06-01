@@ -445,7 +445,7 @@ export async function stepPrepareEngine(
 }
 
 /** Random URL-safe secret. iRedMail's installer treats these as opaque strings. */
-function genSecret(bytes = 24): string {
+export function genSecret(bytes = 24): string {
   return randomBytes(bytes).toString("base64url");
 }
 
@@ -790,6 +790,35 @@ export async function stepReboot(
   return { stepId, success: false, message: "Failed to reconnect after reboot" };
 }
 
+/**
+ * Compose the SPF TXT value. Emits the strictest practical form:
+ *
+ *   v=spf1 mx [ip4:<v4>] [ip6:<v6>] -all
+ *
+ *   - `mx`: authorizes whatever the domain's MX target resolves to. Self-
+ *     repairing if the mail host's IP ever changes — no SPF edit needed.
+ *   - `ip4:` / `ip6:`: explicit IPs of the mail host. Redundant with `mx`
+ *     but lets receivers authorize without an MX lookup, and is robust
+ *     against transient DNS failures on the MX target. Included only
+ *     when we actually detected the host's IPs.
+ *   - `-all` (hardfail): anything not on the list MUST be rejected.
+ *     Gives spoof attempts no soft-landing. The DMARC quarantine policy
+ *     we also publish handles the few legitimate edge cases.
+ *
+ * Exported so the admin/domain-dns.service can emit the exact same SPF
+ * shape when adding additional domains to the mail server.
+ */
+export function buildSpfValue(
+  ipv4?: string | null,
+  ipv6?: string | null,
+): string {
+  const parts: string[] = ["v=spf1", "mx"];
+  if (ipv4) parts.push(`ip4:${ipv4}`);
+  if (ipv6) parts.push(`ip6:${ipv6}`);
+  parts.push("-all");
+  return parts.join(" ");
+}
+
 /** Step 11: Retrieve DKIM keys and build DNS record instructions */
 export async function stepDkimKeys(
   exec: CommandExecutor,
@@ -915,7 +944,7 @@ export async function stepDkimKeys(
     spf: {
       type: "TXT",
       name: domain,
-      value: "v=spf1 mx ~all",
+      value: buildSpfValue(ipv4, ipv6),
       required: true,
     },
     dkim: {

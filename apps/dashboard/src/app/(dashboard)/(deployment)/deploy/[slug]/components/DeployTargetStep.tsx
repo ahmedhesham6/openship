@@ -1,18 +1,19 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
-import { Server, Cloud, Cpu, ArrowRight, Pencil, ChevronDown, CheckCircle2, Loader2 } from "lucide-react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { Server, Cloud, Cpu, ArrowRight, Pencil, ChevronDown, CheckCircle2, Loader2, Plus, Sparkles } from "lucide-react";
 import { useDeployment } from "@/context/DeploymentContext";
-import {
-  publicEndpointsNeedCloud,
-  servicesNeedCloud,
-  usesServiceDeployment,
-} from "@/context/deployment/types";
+import { usesServiceDeployment } from "@/context/deployment/types";
 import { useCloud } from "@/context/CloudContext";
-import { canUseCloudConnection, usePlatform } from "@/context/PlatformContext";
+import { usePlatform } from "@/context/PlatformContext";
 import { systemApi } from "@/lib/api/system";
+import { settingsApi } from "@/lib/api/settings";
 import type { ServerInfo } from "@/lib/api/system";
+import { useToast } from "@/context/ToastContext";
+import { useModal } from "@/context/ModalContext";
 import type { DeployTarget, BuildStrategy } from "@/context/deployment/types";
+import { createPersistedValue, createPersistedFlag } from "@/lib/persisted-value";
+import { AddServerModal } from "./AddServerModal";
 
 // ─── Option card ─────────────────────────────────────────────────────────────
 
@@ -199,6 +200,8 @@ export interface ResolvedTargets {
   hasCloudOption: boolean;
   /** True when there's a real choice to make */
   hasChoice: boolean;
+  /** Refetch the server list — used after returning from /servers/new */
+  refreshServers: () => void;
 }
 
 export function useDesktopTargets(): ResolvedTargets {
@@ -207,23 +210,35 @@ export function useDesktopTargets(): ResolvedTargets {
   const [servers, setServers] = useState<ServerInfo[]>([]);
   const [serversReady, setServersReady] = useState(false);
 
-  useEffect(() => {
-    // Servers only exist in self-hosted mode — skip the API call in SaaS
+  // Fetch servers + filter to ones that can run apps. Exposed so the picker
+  // can re-pull after the user adds a new server in another tab.
+  const fetchServers = useCallback(() => {
     if (!selfHosted) {
       setServersReady(true);
-      return;
+      return () => {};
     }
 
     let cancelled = false;
     systemApi.listServers()
-      // App deploys cannot target mail-only servers. Filter them out at the
-      // UI layer (the backend also refuses, but hiding the option in the
-      // picker is the clearer UX).
       .then((list) => { if (!cancelled) setServers(list.filter((s) => s.runsApps)); })
       .catch(() => {})
       .finally(() => { if (!cancelled) setServersReady(true); });
     return () => { cancelled = true; };
   }, [selfHosted]);
+
+  useEffect(() => {
+    const cleanup = fetchServers();
+    return cleanup;
+  }, [fetchServers]);
+
+  // Refresh when the tab regains focus — covers the "added a server in a new
+  // tab" flow without forcing the user to reload the deploy page.
+  useEffect(() => {
+    if (!selfHosted) return;
+    const onFocus = () => { fetchServers(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [selfHosted, fetchServers]);
 
   const hasServers = servers.length > 0;
   const hasCloudConnected = cloud.connected;
@@ -236,27 +251,191 @@ export function useDesktopTargets(): ResolvedTargets {
     hasCloudConnected,
     hasCloudOption,
     hasChoice: ready && Number(hasServers) + Number(hasCloudOption) > 1,
+    refreshServers: fetchServers,
   };
 }
+
+// ─── Soft "last pick" memory ─────────────────────────────────────────────────
+// Remembers the most recent deploy choice across deployments without the user
+// having to opt in via "Save as default". Distinct from the settings-API
+// default, which is the explicit, cross-device "always use this" setting:
+// localStorage here is the soft, per-browser "what did I pick last time".
+//
+// Priority on seed: settings-API default > localStorage > auto-select fallback.
+
+type LastPick = {
+  target: DeployTarget;
+  serverId?: string | null;
+};
+
+const lastPickStore = createPersistedValue<LastPick>(
+  "openship.deploy-last-pick",
+  (raw): raw is LastPick => {
+    if (!raw || typeof raw !== "object") return false;
+    const obj = raw as { target?: unknown; serverId?: unknown };
+    if (obj.target !== "local" && obj.target !== "server" && obj.target !== "cloud") return false;
+    if (obj.serverId !== undefined && obj.serverId !== null && typeof obj.serverId !== "string") return false;
+    return true;
+  },
+);
+
+// "Have we shown the first-deploy build hint yet?" — set on the first
+// Continue. Once set, subsequent deploys get the full Build picker.
+const buildHintFlag = createPersistedFlag("openship.build-hint-seen");
 
 // ─── Main step ───────────────────────────────────────────────────────────────
 
 interface DeployTargetStepProps {
   targets: ResolvedTargets;
   onContinue: () => void;
+  /**
+   * When true (the default), the step auto-advances to the next step if a
+   * saved default applies cleanly — the user never sees this screen. Set to
+   * false by the parent when the user explicitly navigated back here via
+   * the edit affordance, so we don't bounce them straight back out.
+   */
+  autoSkipAllowed?: boolean;
 }
 
-const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue }) => {
+const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue, autoSkipAllowed = true }) => {
   const { config, updateConfig } = useDeployment();
   const { requireCloud } = useCloud();
-  const { baseDomain, selfHosted, deployMode } = usePlatform();
-  const { ready, servers, hasCloudConnected, hasCloudOption, hasChoice } = targets;
+  const { selfHosted } = usePlatform();
+  const { showToast } = useToast();
+  const { showModal, hideModal } = useModal();
+  const { ready, servers, hasCloudConnected, hasCloudOption, hasChoice, refreshServers } = targets;
   const hasServers = servers.length > 0;
   const isSingleServer = servers.length === 1;
+  // "Save as my default for every deployment" — persists the picked target
+  // (+ server id when applicable) to user_settings on continue.
+  const [saveAsDefault, setSaveAsDefault] = useState(false);
+  const [savingDefault, setSavingDefault] = useState(false);
+  // Whether to render the full picker vs the compact summary pill.
+  // Default = full picker. Flips to compact when a saved default applies
+  // cleanly. User can re-expand any time via the pencil on the pill.
+  const [expanded, setExpanded] = useState(true);
+  // Track when the defaults fetch is done so we can suppress the picker
+  // for a brief moment instead of flashing the full picker before collapsing.
+  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
+  // First-deploy-ever flag — read from localStorage on mount. When true,
+  // we hide the Build picker, auto-match build to deploy, and show a small
+  // hint card instead. Flipped off on the first successful Continue so the
+  // full picker re-appears on subsequent deploys.
+  const [isFirstBuildHint, setIsFirstBuildHint] = useState(false);
+  // User can opt into picking the build location manually from inside the
+  // hint — when true, the hint hides and the full Build picker is shown.
+  const [revealBuildPicker, setRevealBuildPicker] = useState(false);
+
+  // Add server inline via modal. On create, refresh the server list and
+  // auto-select the new one so the user lands on it immediately — no extra
+  // clicks, no tab juggling, deploy config stays intact.
+  const openAddServer = () => {
+    const id = showModal({
+      width: "720px",
+      maxWidth: "92vw",
+      showCloseButton: false,
+      customContent: (
+        <AddServerModal
+          onCancel={() => hideModal(id)}
+          onCreated={(server) => {
+            hideModal(id);
+            refreshServers();
+            updateConfig({ deployTarget: "server", serverId: server.id });
+            lastPickStore.write({ target: "server", serverId: server.id });
+          }}
+        />
+      ),
+    });
+  };
   const isServiceDeployment = usesServiceDeployment(config);
   const showBuildStrategy =
     config.projectType === "app" || (config.projectType === "services" && !isServiceDeployment);
-  const canConnectCloud = canUseCloudConnection({ selfHosted, deployMode });
+
+  // On mount: read first-deploy flag from localStorage. We treat the very
+  // first deploy as "build hint shown" — once the user clicks Continue we
+  // mark it seen, and from then on the full Build picker is back. Skipping
+  // the picker on first run keeps the UI focused; the option remains
+  // available in the post-continue summary and in Settings.
+  useEffect(() => {
+    setIsFirstBuildHint(!buildHintFlag.isSet());
+  }, []);
+
+  // First-deploy-only: auto-match build to deploy target. If the user opts
+  // to pick manually via the hint's "Choose build location", `revealBuildPicker`
+  // flips and we stop forcing the match.
+  useEffect(() => {
+    if (!isFirstBuildHint || revealBuildPicker) return;
+    const want: BuildStrategy = config.deployTarget === "local" ? "local" : "server";
+    if (config.buildStrategy !== want) {
+      updateConfig({ buildStrategy: want });
+    }
+  }, [isFirstBuildHint, revealBuildPicker, config.deployTarget, config.buildStrategy, updateConfig]);
+
+  // Seed the picker from the user's saved default (if any). The ref makes
+  // sure we only ever APPLY the default once — even under StrictMode's
+  // double-mount in dev — so we never clobber a choice the user made after
+  // the initial seed. The fetch itself is allowed to re-run; only the
+  // current invocation's `cancelled` flag gates state updates.
+  const appliedDefaultRef = useRef(false);
+  useEffect(() => {
+    if (!ready) return;
+
+    let cancelled = false;
+    settingsApi.get()
+      .then((res) => {
+        if (cancelled) return;
+        if (appliedDefaultRef.current) return; // already seeded — don't overwrite
+        appliedDefaultRef.current = true;
+
+        const target = res?.defaultDeployTarget;
+        const savedServerId = res?.defaultServerId;
+        let applied = false;
+        if (target === "server") {
+          if (savedServerId && servers.some((s) => s.id === savedServerId)) {
+            updateConfig({ deployTarget: "server", serverId: savedServerId });
+            applied = true;
+          }
+        } else if (target === "cloud") {
+          updateConfig({ deployTarget: "cloud", serverId: undefined, buildStrategy: "server" });
+          applied = true;
+        } else if (target === "local") {
+          updateConfig({ deployTarget: "local", serverId: undefined });
+          applied = true;
+        }
+
+        // No explicit settings-API default? Try the soft "last pick"
+        // memory from localStorage. Validate against current state — if the
+        // remembered server has since been deleted, fall through.
+        if (!applied) {
+          const last = lastPickStore.read();
+          if (last) {
+            if (last.target === "server") {
+              if (last.serverId && servers.some((s) => s.id === last.serverId)) {
+                updateConfig({ deployTarget: "server", serverId: last.serverId });
+                applied = true;
+              }
+            } else if (last.target === "cloud" && hasCloudOption) {
+              updateConfig({ deployTarget: "cloud", serverId: undefined, buildStrategy: "server" });
+              applied = true;
+            } else if (last.target === "local") {
+              updateConfig({ deployTarget: "local", serverId: undefined });
+              applied = true;
+            }
+          }
+        }
+
+        // Collapse to compact summary only when defaults applied cleanly.
+        // Without a default — or with a stale serverId — keep the full
+        // picker so the user can make a fresh choice.
+        if (applied) setExpanded(false);
+      })
+      .catch(() => { /* no default — picker falls back to auto-select */ })
+      .finally(() => { if (!cancelled) setDefaultsLoaded(true); });
+    return () => { cancelled = true; };
+    // Excluded `servers` / `updateConfig` on purpose: this is a one-shot
+    // seed keyed off `ready`. The dep array is intentionally tight.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   // Auto-set deploy target when there's only one option
   useEffect(() => {
@@ -297,10 +476,18 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
       updates.serverId = servers[0].id;
     }
     updateConfig(updates);
+    // Soft memory: remember this choice for next deployment. For "server"
+    // without a resolved serverId yet, store null and let the next
+    // handleServerSelect refine it.
+    lastPickStore.write({
+      target,
+      serverId: target === "server" ? (updates.serverId ?? null) : null,
+    });
   };
 
   const handleServerSelect = (server: ServerInfo) => {
     updateConfig({ deployTarget: "server", serverId: server.id });
+    lastPickStore.write({ target: "server", serverId: server.id });
   };
 
   // Build the deploy target options
@@ -376,45 +563,86 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
     (config.deployTarget === "server" && !!config.serverId && hasServers)
   );
 
+  // Auto-skip eligibility — true when a saved default has applied cleanly
+  // AND the parent allows skipping. While true, we want to bypass the UI
+  // entirely (no flash of compact summary before onContinue fires).
+  const baseLoading = !ready || !defaultsLoaded;
+  const baseCompactEligible = !baseLoading && !expanded && canContinue;
+  const wouldAutoSkip = autoSkipAllowed && baseCompactEligible;
+
+  // Render flags. When we're about to auto-skip, keep showing the loading
+  // spinner so the user sees a single transition (spinner → next step)
+  // instead of (spinner → compact pill → next step).
+  const showLoading = baseLoading || wouldAutoSkip;
+  const useCompact = !showLoading && baseCompactEligible;
+  const showFullPicker = !showLoading && !useCompact;
+
+  // Auto-skip the entire step when a saved default applies cleanly. Parent
+  // sets autoSkipAllowed=false when the user navigated back here on purpose,
+  // so this only fires on the initial entry. Ref prevents StrictMode and
+  // re-render double-fires; once we've handed off to onContinue we're done.
+  const autoSkippedRef = useRef(false);
+  useEffect(() => {
+    if (!wouldAutoSkip) return;
+    if (autoSkippedRef.current) return;
+    autoSkippedRef.current = true;
+    // Persist the "build hint seen" flag too — auto-skipping past the
+    // picker also means the user has effectively been through it once.
+    buildHintFlag.set();
+    onContinue();
+  }, [wouldAutoSkip, onContinue]);
+
+  // Server name for the compact pill — falls back to host if unnamed.
+  const selectedServer = config.deployTarget === "server" && config.serverId
+    ? servers.find((s) => s.id === config.serverId)
+    : null;
+  const summaryServerName = selectedServer
+    ? (selectedServer.name || selectedServer.sshHost)
+    : null;
+
+  // Persist the current pick as the user's default — fire-and-forget so it
+  // never blocks the deploy flow. Failures are surfaced as a toast; the
+  // deploy itself continues either way.
+  const persistDefault = async () => {
+    if (!saveAsDefault) return;
+    setSavingDefault(true);
+    try {
+      await settingsApi.updateDeployDefaults({
+        defaultDeployTarget: config.deployTarget,
+        defaultServerId: config.deployTarget === "server" ? (config.serverId ?? null) : null,
+      });
+      showToast("Saved as your default deploy target", "success", "Defaults");
+    } catch {
+      showToast("Couldn't save default — your deploy will still continue", "error", "Defaults");
+    } finally {
+      setSavingDefault(false);
+    }
+  };
+
   const handleContinue = () => {
+    // The only hard gate at this step: deploying TO Openship Cloud needs an
+    // Openship Cloud connection. Anything else (free .${baseDomain} domains
+    // on own-server / local, free domains in compose services, etc.) is a
+    // downstream concern — the stack/domains screens after Continue prompt
+    // for cloud at the exact moment it's actually needed. Interrupting here
+    // is paternalistic and breaks the "I picked my own server, leave me
+    // alone" signal the user just gave us.
     if (config.deployTarget === "cloud" && !hasCloudConnected) {
       if (!requireCloud("Deploying to Openship Cloud")) {
         return;
       }
     }
 
-    if (
-      !isServiceDeployment &&
-      canConnectCloud &&
-      config.deployTarget !== "cloud" &&
-      publicEndpointsNeedCloud(config.publicEndpoints)
-    ) {
-      if (!requireCloud({
-        feature: `Using free .${baseDomain} domains on your own server`,
-        description: `Free .${baseDomain} domains are routed through Openship Cloud. To deploy this project to your own server, either connect Openship Cloud or switch this project to a custom domain.`,
-        secondaryHint: "If you prefer to stay fully self-hosted, change the project domain to a custom domain and continue.",
-      })) {
-        return;
-      }
-    }
+    // Mark the build hint as seen — future deploys get the full Build picker.
+    buildHintFlag.set();
 
-    // Compose services with free managed domains require cloud
-    if (isServiceDeployment && servicesNeedCloud(config.services)) {
-      if (!requireCloud({
-        feature: `Using free .${baseDomain} domains for your services`,
-        description: `One or more exposed services use free .${baseDomain} domains. To deploy them to your own server, either connect Openship Cloud or switch those services to custom domains.`,
-        secondaryHint: "Custom domains work without Openship Cloud. Free managed domains do not.",
-      })) {
-        return;
-      }
-    }
-
+    void persistDefault();
     onContinue();
   };
 
   return (
     <div className="space-y-8">
-      {!ready && (
+      {showLoading && (
         <div className="space-y-3">
           <div>
             <h3 className="text-base font-semibold text-foreground">
@@ -431,8 +659,26 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
         </div>
       )}
 
+      {/* Compact summary — saved default applied cleanly. The pill itself
+          is the edit affordance: clicking expands the full picker so the
+          user can change build/deploy for this one deployment. */}
+      {useCompact && (
+        <div className="space-y-3">
+          <h3 className="text-base font-semibold text-foreground">
+            Deploy &amp; build
+          </h3>
+          <DeployTargetSummary
+            deployTarget={config.deployTarget}
+            buildStrategy={config.buildStrategy}
+            serverName={summaryServerName}
+            showBuildStrategy={showBuildStrategy}
+            onEdit={() => setExpanded(true)}
+          />
+        </div>
+      )}
+
       {/* Deploy target */}
-      {ready && hasAnyDeployTarget && (
+      {showFullPicker && hasAnyDeployTarget && (
         <div className="space-y-3">
           <div>
             <h3 className="text-base font-semibold text-foreground">
@@ -466,10 +712,20 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
               </OptionCard>
             ))}
           </div>
+          {selfHosted && (
+            <button
+              type="button"
+              onClick={openAddServer}
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-border/60 bg-card/40 px-4 py-2.5 text-sm text-muted-foreground hover:border-primary/40 hover:text-foreground hover:bg-muted/30 transition-all"
+            >
+              <Plus className="size-3.5" />
+              Add your own server
+            </button>
+          )}
         </div>
       )}
 
-      {ready && !hasAnyDeployTarget && (
+      {showFullPicker && !hasAnyDeployTarget && (
         <div className="space-y-3">
           <div>
             <h3 className="text-base font-semibold text-foreground">
@@ -482,10 +738,57 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
           <div className="rounded-xl border border-border/50 bg-card px-4 py-4 text-sm text-muted-foreground leading-relaxed">
             Connect Openship Cloud or add a server to continue with this deployment.
           </div>
+          {selfHosted && (
+            <button
+              type="button"
+              onClick={openAddServer}
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-border/60 bg-card/40 px-4 py-2.5 text-sm text-muted-foreground hover:border-primary/40 hover:text-foreground hover:bg-muted/30 transition-all"
+            >
+              <Plus className="size-3.5" />
+              Add your own server
+            </button>
+          )}
         </div>
       )}
 
-      {showBuildStrategy && (
+      {/* First-deploy hint — replaces the build picker on the user's very
+          first deployment. We auto-match build to deploy target and surface
+          the option as an inline "did you know" so the picker isn't gone
+          forever — they can reveal it inline or change it on the next
+          screen. After the first Continue, the full picker is always shown. */}
+      {showFullPicker && showBuildStrategy && isFirstBuildHint && !revealBuildPicker && (
+        <div className="rounded-xl border border-border/40 bg-muted/15 px-4 py-3.5">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center shrink-0">
+              <Sparkles className="size-4 text-amber-500" strokeWidth={1.75} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground">
+                We&apos;ll {config.options.hasBuild ? "build" : "prepare"} where you deploy
+              </p>
+              <p className="text-xs text-muted-foreground leading-relaxed mt-1">
+                {config.deployTarget === "cloud"
+                  ? "Builds run in managed cloud infrastructure — nothing to set up."
+                  : config.deployTarget === "server"
+                    ? `Builds run on your ${summaryServerName ? `server "${summaryServerName}"` : "server"}. If it's a small VPS, building on this machine can be much faster. You can change this on the next screen or save a preference in Settings.`
+                    : "Builds run on this machine. You can change this on the next screen or save a preference in Settings."}
+              </p>
+              {config.deployTarget !== "cloud" && (
+                <button
+                  type="button"
+                  onClick={() => setRevealBuildPicker(true)}
+                  className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Choose build location
+                  <ArrowRight className="size-3" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFullPicker && showBuildStrategy && (!isFirstBuildHint || revealBuildPicker) && (
         <div className="space-y-3">
           <div>
             <h3 className="text-base font-semibold text-foreground">
@@ -511,6 +814,26 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
             ))}
           </div>
         </div>
+      )}
+
+      {/* Save as default — fire-and-forget on continue. Only shown in the
+          full picker; in compact mode the default's already in use. */}
+      {showFullPicker && canContinue && (
+        <label className="flex items-start gap-2.5 cursor-pointer select-none px-1">
+          <input
+            type="checkbox"
+            checked={saveAsDefault}
+            onChange={(e) => setSaveAsDefault(e.target.checked)}
+            disabled={savingDefault}
+            className="mt-0.5 size-4 shrink-0 rounded border-border/60 bg-card text-primary focus:ring-2 focus:ring-primary/30 focus:ring-offset-0 cursor-pointer disabled:opacity-50"
+          />
+          <span className="text-sm text-muted-foreground leading-snug">
+            Save as my default for every deployment.{" "}
+            <span className="text-muted-foreground/70">
+              Change it later in Settings, or per-deploy from the picker on this page.
+            </span>
+          </span>
+        </label>
       )}
 
       {/* Continue */}

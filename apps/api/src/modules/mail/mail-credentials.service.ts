@@ -77,12 +77,22 @@ export async function updatePostmasterPassword(
   const psqlCmd = `sudo -u postgres psql -d vmail -v ON_ERROR_STOP=1 -c "UPDATE mailbox SET password='${hash}' WHERE username='${username}';"`;
   await exec.exec(psqlCmd);
 
-  // Scrub plaintext from the state file if it lingered from a pre-purge
-  // install. Best-effort: if the state file is missing, the change is
-  // still successful — the hash in the DB is what matters.
+  // Persist the new plaintext into state.secrets so the test-email flow
+  // (and any future SMTP-from-orchestrator use) can authenticate over
+  // submission as postmaster@<domain> without scraping it from disk.
+  //
+  // The state file lives at `/root/.openship-mail-state.json` with root-
+  // only permissions; an attacker with read access there already has
+  // /etc/dovecot/dovecot-sql.conf and the bind credentials. Keeping the
+  // postmaster plaintext alongside the other generated secrets doesn't
+  // widen the blast radius — it just keeps the orchestrator able to act
+  // as the mail server's own admin without paging the operator.
   const state = await readState(exec);
-  if (state && state.secrets.DOMAIN_ADMIN_PASSWD_PLAIN) {
-    const { DOMAIN_ADMIN_PASSWD_PLAIN: _drop, ...secrets } = state.secrets;
+  if (state) {
+    const secrets = {
+      ...state.secrets,
+      DOMAIN_ADMIN_PASSWD_PLAIN: newPassword,
+    };
     await writeState(exec, { ...state, secrets });
   }
 }

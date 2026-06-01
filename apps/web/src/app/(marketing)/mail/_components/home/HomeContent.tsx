@@ -1669,6 +1669,96 @@ export default function HomeContent() {
         </div>
       </motion.div> */}
 
+      {/* ════════════════════════════════════════════════════
+           SETUP GUIDES — deep-link cards into /mail/setup-guide/<client>
+           ════════════════════════════════════════════════════ */}
+      <div className="relative mt-52">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-80px' }}
+          transition={{ duration: 0.5 }}
+          className="flex items-center justify-center"
+        >
+          <h1 className="text-lg font-light text-white/40 md:text-xl">
+            Step-by-step. Per client.
+          </h1>
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-80px' }}
+          transition={{ duration: 0.5, delay: 0.2 }}
+          className="mt-2 flex flex-col items-center justify-center md:mt-8"
+        >
+          <h1 className="text-center text-4xl font-medium text-white md:text-6xl">
+            Setup guides
+          </h1>
+          <h1 className="mb-3 text-center text-4xl font-medium text-white/40 md:text-6xl">
+            for every client
+          </h1>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: '-80px' }}
+          transition={{ duration: 0.5, delay: 0.4 }}
+          className="relative mx-4 mt-10 flex items-center justify-center md:mx-0"
+        >
+          <div className="mx-auto grid w-full max-w-[920px] grid-cols-1 gap-3 sm:grid-cols-2">
+            {[
+              {
+                slug: 'ios',
+                title: 'iOS & macOS Mail',
+                desc: 'Native Apple Mail on iPhone, iPad, and Mac.',
+                tag: 'Apple',
+              },
+              {
+                slug: 'android',
+                title: 'Android Gmail app',
+                desc: 'Add as a third-party IMAP account in Gmail.',
+                tag: 'Android',
+              },
+              {
+                slug: 'desktop',
+                title: 'Desktop clients',
+                desc: 'Thunderbird, Outlook, Spark, K-9 — same flow.',
+                tag: 'IMAP · SMTP',
+              },
+              {
+                slug: 'nodemailer',
+                title: 'Send via code',
+                desc: 'Node, Python, Go — any SMTP library works.',
+                tag: 'SMTP',
+              },
+            ].map((g) => (
+              <Link
+                key={g.slug}
+                href={`/mail/setup-guide/${g.slug}`}
+                className="bg-panelDark group flex items-start gap-3 rounded-2xl border border-white/5 p-4 transition-colors hover:border-white/15"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#1A1A1A]">
+                  <Mail className="h-4 w-4 fill-white" />
+                </div>
+                <div className="flex flex-1 flex-col gap-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-medium leading-none text-white">
+                      {g.title}
+                    </div>
+                    <div className="rounded-full bg-[#202020] px-1.5 py-0.5 text-[9.5px] font-medium uppercase tracking-[0.12em] text-[#8C8C8C]">
+                      {g.tag}
+                    </div>
+                  </div>
+                  <div className="text-xs leading-snug text-[#8C8C8C]">{g.desc}</div>
+                </div>
+                <ArrowRight className="mt-1 h-3 w-3 shrink-0 fill-[#8C8C8C] transition-colors group-hover:fill-white" />
+              </Link>
+            ))}
+          </div>
+        </motion.div>
+      </div>
+
       <div className="relative mt-52">
         <MailFooter />
       </div>

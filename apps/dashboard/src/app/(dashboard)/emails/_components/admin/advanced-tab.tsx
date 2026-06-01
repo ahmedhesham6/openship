@@ -7,37 +7,26 @@
  *   1. Protocol settings — the host/port/encryption pairs for inbound
  *      (IMAP) and outbound (SMTP). Useful when wiring a client manually
  *      but noisy on the Overview, so it lives here.
- *   2. Components       — full per-daemon control panel. Start, stop,
- *      restart, view logs for every unit on the box. Health tab only
- *      surfaces a Fix CTA for broken components; routine power-user
- *      control lives here.
- *   3. Mail-stack tools — bulk recovery actions (restart all daemons).
+ *   2. Mail-stack tools — bulk recovery actions (restart all daemons).
  *      Less destructive than the danger zone — these touch only the
- *      running stack, never the on-disk state.
- *   4. Danger zone      — re-run wizard, reset on-server state. Tucked
+ *      running stack, never the on-disk state. Per-daemon controls live
+ *      on the Health tab (logs + 3-dot menu on each daemon row).
+ *   3. Danger zone      — re-run wizard, reset on-server state. Tucked
  *      away so the operator isn't one mis-click from a destructive
  *      action while just reading credentials.
- *   5. Install metadata — server ID, primary domain, install timestamps.
+ *   4. Install metadata — server ID, primary domain, install timestamps.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
-  CheckCircle2,
-  CircleAlert,
-  CircleDashed,
-  CircleX,
-  Cpu,
   Inbox,
   Lock,
   Loader2,
-  Play,
   RotateCw,
-  ScrollText,
   Send,
   Settings2,
-  Square,
   Trash2,
   Wrench,
 } from "lucide-react";
@@ -46,16 +35,12 @@ import {
   mailAdminApi,
   getApiErrorMessage,
   type BulkRestartResult,
-  type ComponentAction,
-  type MailComponentHealth,
-  type MailComponentStatus,
   type MailCredentials,
   type MailSetupStatus,
 } from "@/lib/api";
 import { useModal } from "@/context/ModalContext";
 import { useToast } from "@/context/ToastContext";
 import { FormModalContent } from "./_shared/form-modal-content";
-import { LogsDrawer } from "./_shared/logs-drawer";
 
 interface AdvancedTabProps {
   status: MailSetupStatus;
@@ -130,9 +115,6 @@ export function AdvancedTab({ status, serverId, onChanged }: AdvancedTabProps) {
           <ProtocolCard credentials={status.credentials} />
         </section>
       )}
-
-      {/* Components */}
-      <ComponentsSection serverId={serverId} />
 
       {/* Mail-stack recovery tools */}
       <MailStackToolsSection serverId={serverId} />
@@ -355,311 +337,6 @@ function MetaRow({
       </dd>
     </div>
   );
-}
-
-// ─── Components section ──────────────────────────────────────────────────────
-
-/**
- * Full per-component control. One card per daemon with start/stop/restart
- * and a Logs button. Status auto-polls every 10s — same cadence as the
- * Health tab so the two surfaces stay in agreement without coordination.
- *
- * This is the surface to use when an operator wants to manipulate a
- * specific unit (e.g. stop ClamAV temporarily to free RAM). Health tab is
- * the "is it green?" surface; this is "let me drive."
- */
-function ComponentsSection({ serverId }: { serverId: string }) {
-  const [components, setComponents] = useState<MailComponentHealth[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const tick = useCallback(async () => {
-    try {
-      const r = await mailApi.getHealth(serverId);
-      setComponents(r.components);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Health check failed");
-    }
-  }, [serverId]);
-
-  useEffect(() => {
-    void tick();
-    const id = setInterval(() => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      void tick();
-    }, 10_000);
-    return () => clearInterval(id);
-  }, [tick]);
-
-  return (
-    <section className="space-y-4">
-      <div>
-        <div className="flex items-center gap-2">
-          <Cpu className="size-4 text-muted-foreground" strokeWidth={2.25} />
-          <h2 className="text-lg font-semibold text-foreground">Components</h2>
-        </div>
-        <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-          Start, stop, restart, or tail logs for any unit on the mail box.
-          Status polls every 10 seconds. The Health tab will flag broken
-          components — use this surface for routine manipulation.
-        </p>
-      </div>
-
-      <div className="bg-card rounded-2xl border border-border/50 overflow-hidden">
-        {error && (
-          <div className="px-5 py-3 text-sm text-red-600 dark:text-red-400 border-b border-border/40 bg-red-500/5">
-            {error}
-          </div>
-        )}
-        {components === null && !error ? (
-          <div className="px-5 py-10 text-center text-sm text-muted-foreground">
-            Loading components…
-          </div>
-        ) : components ? (
-          <div className="divide-y divide-border/40">
-            {components.map((c) => (
-              <ComponentControlRow
-                key={c.key}
-                serverId={serverId}
-                component={c}
-                onActed={tick}
-              />
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
-function ComponentControlRow({
-  serverId,
-  component,
-  onActed,
-}: {
-  serverId: string;
-  component: MailComponentHealth;
-  onActed: () => Promise<void> | void;
-}) {
-  const { showToast } = useToast();
-  const [busy, setBusy] = useState<ComponentAction | null>(null);
-  const [logsOpen, setLogsOpen] = useState(false);
-  const presentation = componentPresentation(component.status);
-
-  const act = async (action: ComponentAction) => {
-    if (busy) return;
-    setBusy(action);
-    try {
-      await mailAdminApi.components.action(serverId, component.key, action);
-      showToast(`${component.label} ${actionPastTense(action)}`, "success");
-      await onActed();
-    } catch (err) {
-      showToast(
-        err instanceof Error ? err.message : `Failed to ${action}`,
-        "error",
-        `${component.label} ${action} failed`,
-      );
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const isRunning = component.status === "active";
-  const canStart =
-    component.status === "inactive" || component.status === "failed";
-
-  return (
-    <>
-      <div className="flex items-center gap-4 px-5 py-4">
-        <div
-          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${presentation.iconBg}`}
-        >
-          <presentation.Icon
-            className={`size-4 ${presentation.iconColor}`}
-            strokeWidth={2}
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-[13.5px] font-medium text-foreground truncate">
-              {component.label}
-            </p>
-            <span className="font-mono text-[11px] text-muted-foreground/80 truncate">
-              {component.unit}
-            </span>
-            <span
-              className={`text-[11px] font-medium ${presentation.textColor}`}
-            >
-              · {presentation.label}
-            </span>
-          </div>
-          <p className="text-[11.5px] text-muted-foreground mt-0.5 truncate">
-            {component.description}
-          </p>
-        </div>
-        {component.status !== "missing" && (
-          <div className="flex items-center gap-1 shrink-0">
-            {isRunning && (
-              <ControlIconButton
-                title="Restart"
-                onClick={() => act("restart")}
-                busy={busy === "restart"}
-                disabled={busy !== null}
-                icon={RotateCw}
-              />
-            )}
-            {canStart && (
-              <ControlIconButton
-                title="Start"
-                onClick={() => act("start")}
-                busy={busy === "start"}
-                disabled={busy !== null}
-                icon={Play}
-              />
-            )}
-            {isRunning && (
-              <ControlIconButton
-                title="Stop"
-                onClick={() => act("stop")}
-                busy={busy === "stop"}
-                disabled={busy !== null}
-                icon={Square}
-              />
-            )}
-            <ControlIconButton
-              title="Logs"
-              onClick={() => setLogsOpen(true)}
-              busy={false}
-              disabled={false}
-              icon={ScrollText}
-            />
-          </div>
-        )}
-      </div>
-      {logsOpen && (
-        <LogsDrawer
-          serverId={serverId}
-          componentKey={component.key}
-          unit={component.unit}
-          label={component.label}
-          onClose={() => setLogsOpen(false)}
-        />
-      )}
-    </>
-  );
-}
-
-function ControlIconButton({
-  title,
-  onClick,
-  busy,
-  disabled,
-  icon: Icon,
-}: {
-  title: string;
-  onClick: () => void;
-  busy: boolean;
-  disabled: boolean;
-  icon: typeof RotateCw;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      aria-label={title}
-      className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
-    >
-      {busy ? (
-        <Loader2 className="size-3.5 animate-spin" strokeWidth={2.25} />
-      ) : (
-        <Icon className="size-3.5" strokeWidth={2.25} />
-      )}
-    </button>
-  );
-}
-
-function actionPastTense(action: ComponentAction): string {
-  switch (action) {
-    case "restart":
-      return "restarted";
-    case "start":
-      return "started";
-    case "stop":
-      return "stopped";
-  }
-}
-
-interface ComponentPresentation {
-  Icon: typeof CheckCircle2;
-  iconBg: string;
-  iconColor: string;
-  textColor: string;
-  label: string;
-}
-
-function componentPresentation(
-  status: MailComponentStatus,
-): ComponentPresentation {
-  switch (status) {
-    case "active":
-      return {
-        Icon: CheckCircle2,
-        iconBg: "bg-emerald-500/10",
-        iconColor: "text-emerald-600 dark:text-emerald-400",
-        textColor: "text-emerald-700 dark:text-emerald-400",
-        label: "Running",
-      };
-    case "activating":
-      return {
-        Icon: Loader2,
-        iconBg: "bg-blue-500/10",
-        iconColor: "text-blue-600 dark:text-blue-400 animate-spin",
-        textColor: "text-blue-700 dark:text-blue-400",
-        label: "Starting",
-      };
-    case "deactivating":
-      return {
-        Icon: Loader2,
-        iconBg: "bg-amber-500/10",
-        iconColor: "text-amber-600 dark:text-amber-400 animate-spin",
-        textColor: "text-amber-700 dark:text-amber-400",
-        label: "Stopping",
-      };
-    case "inactive":
-      return {
-        Icon: CircleDashed,
-        iconBg: "bg-muted",
-        iconColor: "text-muted-foreground",
-        textColor: "text-muted-foreground",
-        label: "Stopped",
-      };
-    case "failed":
-      return {
-        Icon: CircleX,
-        iconBg: "bg-red-500/10",
-        iconColor: "text-red-600 dark:text-red-400",
-        textColor: "text-red-600 dark:text-red-400",
-        label: "Failed",
-      };
-    case "missing":
-      return {
-        Icon: CircleAlert,
-        iconBg: "bg-amber-500/10",
-        iconColor: "text-amber-600 dark:text-amber-400",
-        textColor: "text-amber-700 dark:text-amber-400",
-        label: "Not installed",
-      };
-    default:
-      return {
-        Icon: CircleDashed,
-        iconBg: "bg-muted",
-        iconColor: "text-muted-foreground",
-        textColor: "text-muted-foreground",
-        label: "Unknown",
-      };
-  }
 }
 
 // ─── Mail-stack tools (bulk restart) ─────────────────────────────────────────

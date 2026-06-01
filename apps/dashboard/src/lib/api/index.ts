@@ -29,11 +29,18 @@ export { deployApi } from "./deploy";
 export { domainsApi } from "./domains";
 export { githubApi } from "./github";
 export { iconsApi } from "./icons";
+export { imagesApi } from "./images";
+export type { ImageCatalogEntry, ListImagesResponse } from "./images";
 export { aiApi } from "./ai";
 export { sandboxApi } from "./sandbox";
 export { systemApi } from "./system";
 export { settingsApi } from "./settings";
-export type { BuildMode, UserSettingsResponse } from "./settings";
+export type {
+  BuildMode,
+  UserSettingsResponse,
+  DefaultDeployTarget,
+  DeployDefaultsResponse,
+} from "./settings";
 export { cloudApi } from "./cloud";
 export type { CloudStatus } from "./cloud";
 export { servicesApi } from "./services";

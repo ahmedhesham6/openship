@@ -2,10 +2,11 @@
 
 /**
  * Reputation warm-up banner — sits at the top of the admin panel for the
- * first ~7 days after install, telling the operator that early mail may
- * land in spam while their domain builds a sending reputation. Dismissable;
- * dismissal and the install timestamp are kept in localStorage keyed by
- * serverId so the banner stays gone once the operator acknowledges.
+ * first ~7 days after a domain starts sending, telling the operator that
+ * early mail may land in spam while reputation builds. Dismissable;
+ * dismissal and the warm-up start timestamp are kept in localStorage keyed
+ * by `serverId:domain` so each domain on a multi-domain mail server has
+ * its own independent banner + clock.
  *
  * Visual: amber-tinted card with a soft gradient, two short lines, an
  * "I know" dismiss link. Designed to read like a one-time editorial note
@@ -16,7 +17,17 @@ import { useEffect, useState } from "react";
 import { Clock3, X } from "lucide-react";
 
 const WARMUP_WINDOW_DAYS = 7;
-const STORAGE_KEY_PREFIX = "openship:mail:reputation:";
+export const REPUTATION_STORAGE_PREFIX = "openship:mail:reputation:";
+
+/**
+ * Per-domain localStorage key used by `ReputationBanner`. Exported so the
+ * post-ack flow in DomainsTab can seed `installedAt = Date.now()` at the
+ * moment the operator confirms DNS, which is when the new domain starts
+ * accepting/sending mail in earnest.
+ */
+export function reputationStorageKey(serverId: string, domain: string): string {
+  return `${REPUTATION_STORAGE_PREFIX}${serverId}:${domain}`;
+}
 
 interface ReputationBannerProps {
   serverId: string;
@@ -52,8 +63,8 @@ export function ReputationBanner({ serverId, domain }: ReputationBannerProps) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    if (!serverId || typeof window === "undefined") return;
-    const key = `${STORAGE_KEY_PREFIX}${serverId}`;
+    if (!serverId || !domain || typeof window === "undefined") return;
+    const key = reputationStorageKey(serverId, domain);
     const now = Date.now();
     let state = readState(key);
 
@@ -68,10 +79,10 @@ export function ReputationBanner({ serverId, domain }: ReputationBannerProps) {
     if (elapsedDays >= WARMUP_WINDOW_DAYS) return;
 
     setVisible(true);
-  }, [serverId]);
+  }, [serverId, domain]);
 
   const dismiss = () => {
-    const key = `${STORAGE_KEY_PREFIX}${serverId}`;
+    const key = reputationStorageKey(serverId, domain);
     const current = readState(key) ?? { installedAt: Date.now(), dismissed: false };
     writeState(key, { ...current, dismissed: true });
     setVisible(false);

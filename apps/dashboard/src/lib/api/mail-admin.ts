@@ -230,10 +230,21 @@ export const mailAdminApi = {
       api.get<DnsScanResult>(endpoints.mail.admin.dnsScan(serverId)),
   },
   testEmail: {
-    send: (serverId: string, to: string) =>
-      api.post<{ to: string; from: string; messageId: string }>(
+    /**
+     * Send a welcome / verification email from `postmaster@<fromDomain>`.
+     * `fromDomain` defaults to the primary install domain server-side.
+     * Pass the additional domain to test sending AS a newly-added domain
+     * after the operator acks its DNS records.
+     */
+    send: (serverId: string, to: string, fromDomain?: string) =>
+      api.post<{
+        to: string;
+        from: string;
+        messageId: string;
+        smtpResponse: string;
+      }>(
         endpoints.mail.admin.testEmail(serverId),
-        { to },
+        fromDomain ? { to, fromDomain } : { to },
       ),
   },
   components: {

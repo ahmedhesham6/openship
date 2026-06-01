@@ -366,6 +366,10 @@ export async function sendTestEmailHandler(c: Context) {
   try {
     const result = await sendTestEmail(serverId, {
       to: String(body.to ?? ""),
+      fromDomain:
+        typeof body.fromDomain === "string" && body.fromDomain.trim()
+          ? body.fromDomain
+          : undefined,
     });
     return c.json(result);
   } catch (err) {

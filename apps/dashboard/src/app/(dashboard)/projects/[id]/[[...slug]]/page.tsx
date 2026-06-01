@@ -296,7 +296,10 @@ const EnvironmentSwitcher = () => {
       </button>
 
       {isOpen && (
-        <div className="absolute right-11 top-full z-40 mt-2 w-[320px] overflow-hidden rounded-lg border border-border/50 bg-card shadow-xl">
+        <div
+          className="absolute right-11 top-full z-40 mt-2 w-[320px] overflow-hidden rounded-lg border border-border/50 shadow-xl"
+          style={{ backgroundColor: "var(--th-card-bg-solid, var(--card))" }}
+        >
           <div className="max-h-[320px] overflow-y-auto p-1">
             {options.map((env) => {
               const active = env.id === projectData.id;
@@ -324,7 +327,10 @@ const EnvironmentSwitcher = () => {
       )}
 
       {isAdding && (
-        <div className="absolute right-0 top-full z-40 mt-2 w-[340px] rounded-lg border border-border/50 bg-card p-2 shadow-xl">
+        <div
+          className="absolute right-0 top-full z-40 mt-2 w-[340px] rounded-lg border border-border/50 p-2 shadow-xl"
+          style={{ backgroundColor: "var(--th-card-bg-solid, var(--card))" }}
+        >
           <div className="space-y-2">
             <input
               value={branchQuery}
@@ -445,11 +451,11 @@ const ProjectSettingsContent = () => {
   const { showToast } = useToast();
   const router = useRouter();
 
-  const handleDeleteProject = async (deleteApp = true) => {
+  const handleDeleteProject = async (deleteApp = true, wipeVolumes = false) => {
     // Optimistic - immediately show "Deleting" status
     setProjectData((prev: any) => ({ ...prev, deletedAt: new Date().toISOString() }));
 
-    const response = await projectsApi.delete(projectData.id, { deleteApp });
+    const response = await projectsApi.delete(projectData.id, { deleteApp, wipeVolumes });
     if (response.success) {
       showToast(deleteApp ? "Project deleted successfully" : "Environment deleted successfully", "success");
       router.push("/");

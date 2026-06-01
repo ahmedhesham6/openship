@@ -86,6 +86,25 @@ export const userSettings = pgTable("user_settings", {
    */
   cloudSessionToken: text("cloud_session_token"),
 
+  /**
+   * Default deploy target seeded into new deployments:
+   *   "local"  → this machine
+   *   "server" → a configured server (pair with `defaultServerId`)
+   *   "cloud"  → Openship Cloud
+   *   null     → no preference, the deploy picker chooses (auto-selected
+   *              when only one target is available)
+   * The user can always override per-deployment from the picker on /deploy.
+   */
+  defaultDeployTarget: text("default_deploy_target"),
+
+  /**
+   * When defaultDeployTarget="server", the specific server to preselect.
+   * Stored as a free-form text id (not FK) so that the row survives a
+   * server deletion — the deploy picker just falls back to "no default"
+   * when the id no longer resolves.
+   */
+  defaultServerId: text("default_server_id"),
+
   // ── Timestamps ─────────────────────────────────────────────────────────────
 
   createdAt: timestamp("created_at").notNull().defaultNow(),

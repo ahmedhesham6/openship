@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { Terminal, Server } from "lucide-react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { TerminalLogs } from "./logs/TerminalLogs";
 import { ServerLogs } from "./logs/ServerLogs";
@@ -20,7 +21,6 @@ export const LogsSettings = () => {
     clearTerminalLogs,
     clearServerLogs,
     servicesData,
-    hasMultipleServices,
   } = useProjectSettings();
   const hasProjectId = Boolean(id && id !== "undefined");
   const hasResolvedServerMode =
@@ -31,11 +31,18 @@ export const LogsSettings = () => {
     projectData?.options?.hasServer === true ||
     projectData?.hasServer === true ||
     (buildData.isLoading === false && buildData.hasServer === true);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const serviceIdFromUrl = searchParams.get("service");
   const [activeTab, setActiveTab] = useState<LogsTab>("server");
   const hasSelectedTabRef = useRef(false);
   const [copied, setCopied] = useState(false);
   const [currentLogs, setCurrentLogs] = useState<string[]>([]);
-  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
+  // Seed from URL so the "View logs" shortcut on a service detail can deep-link
+  // straight to that service's logs. Falls back to the auto-pick logic below
+  // if the URL param is missing or stale.
+  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(serviceIdFromUrl);
+  const urlDeepLinkAppliedRef = useRef(false);
   const services = servicesData.services;
   const servicesLoading = servicesData.isLoading;
   const servicesLoaded = !servicesData.isLoading;
@@ -43,6 +50,13 @@ export const LogsSettings = () => {
   const canShowLogs = effectiveHasServer || hasServices;
   const canShowTerminal = canShowLogs;
   const hasResolvedLogTargets = hasResolvedServerMode && (effectiveHasServer || servicesLoaded);
+  // True when there's more than one runtime to stream from — used to gate
+  // the switcher UI. A "target" is the project's own runtime OR a service.
+  // Previously this was `hasMultipleServices` (services count > 1) which
+  // missed the common case of "single app + 1 service" where the user
+  // still needs to pick which one to look at.
+  const logTargetCount = (effectiveHasServer ? 1 : 0) + services.length;
+  const hasMultipleLogTargets = logTargetCount > 1;
 
   useEffect(() => {
     if (!hasResolvedLogTargets) return;
@@ -55,6 +69,27 @@ export const LogsSettings = () => {
       setActiveTab("terminal");
     }
   }, [hasResolvedLogTargets, canShowLogs]);
+
+  // Apply `?service=X` once services are loaded: force the Terminal tab,
+  // pin the selection, then strip the param from the URL so a refresh
+  // doesn't re-trigger the deep-link logic indefinitely.
+  useEffect(() => {
+    if (urlDeepLinkAppliedRef.current) return;
+    if (!serviceIdFromUrl || servicesLoading) return;
+    const match = services.find((s) => s.id === serviceIdFromUrl);
+    if (!match) {
+      // Service was deleted or doesn't belong to this project — clear the
+      // stale param and let auto-pick take over.
+      urlDeepLinkAppliedRef.current = true;
+      router.replace(`/projects/${id}/logs`);
+      return;
+    }
+    urlDeepLinkAppliedRef.current = true;
+    hasSelectedTabRef.current = true;
+    setActiveTab("terminal");
+    setSelectedServiceId(match.id);
+    router.replace(`/projects/${id}/logs`);
+  }, [serviceIdFromUrl, services, servicesLoading, router, id]);
 
   const switchTab = useCallback(
     (tab: LogsTab) => {
@@ -70,22 +105,24 @@ export const LogsSettings = () => {
     if (!hasProjectId || servicesLoading) return;
 
     setSelectedServiceId((current) => {
-      if (hasMultipleServices && current && services.some((service) => service.id === current)) {
+      if (hasMultipleLogTargets && current && services.some((service) => service.id === current)) {
         return current;
       }
 
-      if (hasMultipleServices) {
+      if (hasMultipleLogTargets) {
+        // Multi-target: default to the project runtime if it exists,
+        // otherwise the first service.
         return effectiveHasServer ? null : (services[0]?.id ?? null);
       }
 
       return !effectiveHasServer && services.length === 1 ? services[0].id : null;
     });
-  }, [effectiveHasServer, hasMultipleServices, hasProjectId, services, servicesLoading]);
+  }, [effectiveHasServer, hasMultipleLogTargets, hasProjectId, services, servicesLoading]);
 
   const selectedService = services.find((service) => service.id === selectedServiceId) ?? null;
   const implicitSingleService =
-    !hasMultipleServices && !effectiveHasServer ? (services[0] ?? null) : null;
-  const terminalService = hasMultipleServices ? selectedService : implicitSingleService;
+    !hasMultipleLogTargets && !effectiveHasServer ? (services[0] ?? null) : null;
+  const terminalService = hasMultipleLogTargets ? selectedService : implicitSingleService;
   const isServiceLogTarget = Boolean(terminalService);
   const terminalStreamTarget = !hasProjectId
     ? ""
@@ -231,13 +268,15 @@ export const LogsSettings = () => {
       <div className="flex-1 min-h-[460px]">
         {activeTab === "terminal" && canShowTerminal && (
           <div className="space-y-4">
-            {hasMultipleServices && (
+            {hasMultipleLogTargets && (
               <div className="rounded-2xl border border-border/60 bg-card/70 p-4">
                 <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
                     <p className="text-sm font-medium text-foreground">Runtime log target</p>
                     <p className="text-sm text-muted-foreground">
-                      Switch between the project runtime and service runtimes.
+                      {effectiveHasServer
+                        ? "Switch between the project runtime and service runtimes."
+                        : "Switch between service runtimes."}
                     </p>
                   </div>
                   <div className="min-w-[220px]">
@@ -259,7 +298,7 @@ export const LogsSettings = () => {
               </div>
             )}
 
-            {hasMultipleServices && !effectiveHasServer && !selectedService ? (
+            {hasMultipleLogTargets && !effectiveHasServer && !selectedService ? (
               <div className="flex min-h-[420px] items-center justify-center rounded-3xl border border-border/50 bg-card text-sm text-muted-foreground">
                 Select a service to view its runtime logs.
               </div>

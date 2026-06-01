@@ -5,6 +5,9 @@ import { Loader2, Plus, Save, X } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import type { Service, ServiceInput } from "@/lib/api/services";
 import { RoutingSettingsCard } from "@/components/routing/RoutingSettingsCard";
+import EnvironmentVariables from "@/components/import-project/EnvironmentVariables";
+
+type EnvRow = { key: string; value: string; visible: boolean };
 
 type ServiceEditorMode = "create" | "edit";
 
@@ -25,22 +28,20 @@ const splitList = (value: string) =>
 
 const joinList = (value?: string[] | null) => (value ?? []).join("\n");
 
-const parseEnvironment = (value: string) => {
-  const env: Record<string, string> = {};
-  for (const line of value.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const index = trimmed.indexOf("=");
-    if (index <= 0) continue;
-    env[trimmed.slice(0, index).trim()] = trimmed.slice(index + 1).trim();
-  }
-  return env;
-};
+const envRowsFromRecord = (value?: Record<string, string> | null): EnvRow[] =>
+  // Service env values are config knobs more often than secrets — show them
+  // by default so the user can read what's there without un-masking each row.
+  Object.entries(value ?? {}).map(([key, val]) => ({ key, value: val, visible: true }));
 
-const formatEnvironment = (value?: Record<string, string> | null) =>
-  Object.entries(value ?? {})
-    .map(([key, val]) => `${key}=${val}`)
-    .join("\n");
+const envRecordFromRows = (rows: EnvRow[]): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const k = r.key.trim();
+    if (!k) continue;
+    out[k] = r.value;
+  }
+  return out;
+};
 
 export function ServiceEditorModal({
   open,
@@ -57,7 +58,7 @@ export function ServiceEditorModal({
   const [dockerfile, setDockerfile] = useState("");
   const [ports, setPorts] = useState("");
   const [dependsOn, setDependsOn] = useState("");
-  const [environment, setEnvironment] = useState("");
+  const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [volumes, setVolumes] = useState("");
   const [command, setCommand] = useState("");
   const [restart, setRestart] = useState("unless-stopped");
@@ -80,7 +81,7 @@ export function ServiceEditorModal({
     setDockerfile(service?.dockerfile ?? "");
     setPorts(joinList(service?.ports));
     setDependsOn(joinList(service?.dependsOn));
-    setEnvironment(formatEnvironment(service?.environment));
+    setEnvRows(envRowsFromRecord(service?.environment));
     setVolumes(joinList(service?.volumes));
     setCommand(service?.command ?? "");
     setRestart(service?.restart ?? "unless-stopped");
@@ -125,7 +126,7 @@ export function ServiceEditorModal({
       dockerfile: sourceType === "build" ? dockerfile.trim() : "",
       ports: portList,
       dependsOn: splitList(dependsOn),
-      environment: parseEnvironment(environment),
+      environment: envRecordFromRows(envRows),
       volumes: splitList(volumes),
       command: command.trim(),
       restart,
@@ -277,15 +278,18 @@ export function ServiceEditorModal({
             </Field>
           </div>
 
-          <Field label="Environment">
-            <textarea
-              value={environment}
-              onChange={(event) => setEnvironment(event.target.value)}
-              placeholder={"DATABASE_URL=postgres://...\nREDIS_URL=redis://redis:6379"}
-              rows={4}
-              className="w-full rounded-xl border border-border/50 bg-muted/20 px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary/40"
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-2">Environment</p>
+            <EnvironmentVariables
+              mode="settings"
+              envVars={envRows}
+              onEnvVarsChange={setEnvRows}
+              isEditingMode={true}
+              setIsEditingMode={() => { /* always editing in modal context */ }}
+              showSettingsActions={false}
+              borderless
             />
-          </Field>
+          </div>
 
           <Field label="Volumes">
             <textarea

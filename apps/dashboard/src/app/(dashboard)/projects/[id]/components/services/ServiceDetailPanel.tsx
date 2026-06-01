@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 import { usePlatform } from "@/context/PlatformContext";
 import { useToast } from "@/context/ToastContext";
 import { servicesApi, type Service, type ServiceContainer, type ServiceInput } from "@/lib/api/services";
@@ -52,6 +53,7 @@ export function ServiceDetailPanel({
 }: ServiceDetailPanelProps) {
   const { baseDomain } = usePlatform();
   const { showToast } = useToast();
+  const router = useRouter();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -160,6 +162,17 @@ export function ServiceDetailPanel({
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() =>
+                  // Jump to the project Logs tab with this service pre-selected.
+                  // LogsSettings reads `?service=` and strips it after applying.
+                  router.push(`/projects/${projectId}/logs?service=${encodeURIComponent(service.id)}`)
+                }
+                className="inline-flex items-center gap-1.5 rounded-xl bg-foreground/[0.06] px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-foreground/[0.1]"
+              >
+                <Terminal className="size-3.5" />
+                View logs
+              </button>
               <button
                 onClick={() => setEditOpen(true)}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-foreground/[0.06] px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-foreground/[0.1]"

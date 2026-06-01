@@ -16,9 +16,9 @@ export default function AndroidGuidePage() {
       subtitle="Add your mailbox to the Gmail app on Android as a third-party IMAP account. Same flow works on Android 12 through 15; menu wording may vary slightly between OEM skins."
     >
       <GuideSection title="Before you start">
-        <p className="text-sm text-muted-foreground leading-relaxed">
-          You need the username and password from the Overview tab, plus the
-          IMAP / SMTP host and port shown in the right rail. Tap{" "}
+        <p className="text-sm leading-relaxed text-white/70">
+          You need the username and password from your Openship admin Overview tab,
+          plus the IMAP / SMTP host and port shown in the right rail. Tap{" "}
           <em>"Manual setup"</em> when offered — auto-detection often picks
           the wrong port.
         </p>

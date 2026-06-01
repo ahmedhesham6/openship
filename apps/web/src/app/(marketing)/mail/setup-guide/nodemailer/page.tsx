@@ -7,7 +7,7 @@ import {
   GuideSection,
   Steps,
 } from "../_components/guide-layout";
-import { CodeBlock } from "./_components/code-block";
+import { CodeBlock } from "../_components/code-block";
 
 export default function NodemailerGuidePage() {
   return (
@@ -31,7 +31,7 @@ bun add nodemailer`}
 {`import nodemailer from "nodemailer";
 
 export const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST!,        // imap/smtp host from the right rail
+  host: process.env.SMTP_HOST!,        // smtp host from the right rail
   port: Number(process.env.SMTP_PORT), // 587
   secure: false,                       // STARTTLS upgrades after connect
   requireTLS: true,                    // refuse if TLS upgrade is unavailable
@@ -45,8 +45,8 @@ export const transporter = nodemailer.createTransport({
           <strong>Why port 587 + STARTTLS instead of 465 + secure: true?</strong>
           {" "}Both work. 587/STARTTLS is the modern submission standard and
           is what most clients pick. 465 (implicit TLS) is supported too —
-          set <code className="font-mono text-[12px] px-1 py-0.5 rounded bg-muted/60">port: 465, secure: true</code>{" "}
-          and remove <code className="font-mono text-[12px] px-1 py-0.5 rounded bg-muted/60">requireTLS</code>.
+          set <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-[12px]">port: 465, secure: true</code>{" "}
+          and remove <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-[12px]">requireTLS</code>.
         </Callout>
       </GuideSection>
 
@@ -65,7 +65,7 @@ await transporter.sendMail({
       </GuideSection>
 
       <GuideSection title="Verify the connection first">
-        <p className="text-sm text-muted-foreground leading-relaxed">
+        <p className="text-sm leading-relaxed text-white/70">
           On boot, ping the server so a broken config fails fast instead of
           waiting for the first sendMail to time out:
         </p>
@@ -76,7 +76,7 @@ console.log("SMTP ready");`}
       </GuideSection>
 
       <GuideSection title="From other languages">
-        <p className="text-sm text-muted-foreground leading-relaxed">
+        <p className="text-sm leading-relaxed text-white/70">
           The shape is identical across libraries — host, port, TLS mode,
           username, password.
         </p>
@@ -119,7 +119,7 @@ err := smtp.SendMail(
             <>
               Never commit the password. Use <strong>environment variables</strong>{" "}
               loaded at runtime (Vercel/Railway/Fly all do this; locally
-              use <code className="font-mono text-[12px] px-1 py-0.5 rounded bg-muted/60">.env.local</code>).
+              use <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-[12px]">.env.local</code>).
             </>,
             <>
               Keep a single <strong>transporter</strong> instance for the
@@ -137,8 +137,8 @@ err := smtp.SendMail(
               network blips are normal.
             </>,
             <>
-              Check the Components tab if mail stops sending — Postfix runs
-              there, and its queue is what holds outbound mail.
+              Check the Health tab in your Openship admin if mail stops
+              sending — the outbound queue lives there.
             </>,
           ]}
         />
