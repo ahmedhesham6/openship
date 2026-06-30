@@ -4,11 +4,13 @@
  * Thin wrapper around dumpSubgraph / restoreSubgraph + the unified
  * cloudClient.{ingestSubgraph,exportSubgraph} primitives. Both directions:
  *
- *   transferProjectToCloud      — dump local project subgraph, push to SaaS,
- *                                 flip cloudWorkspaceId locally.
- *   transferProjectToSelfHosted — pull project subgraph from SaaS, wipe
- *                                 the local (shadow) rows, restore, clear
- *                                 cloudWorkspaceId.
+ *   transferProjectToCloud      — PROMOTE: dump local project subgraph, push to
+ *                                 SaaS (which becomes the source of truth),
+ *                                 then DELETE the local rows so there's no
+ *                                 shadow. The project becomes cloud-canonical.
+ *   transferProjectToSelfHosted — bring-home: pull project subgraph from SaaS,
+ *                                 wipe the local rows, restore, clear
+ *                                 cloudWorkspaceId. (Demote — see plan.)
  *
  * SCOPE OF THIS FILE: data-layer transfer only. Container teardown on the
  * source side, mail-server reattachment, GitHub installation re-binding,
@@ -29,6 +31,8 @@ import {
   type SubgraphScope,
 } from "@repo/db";
 import { cloudClient } from "../../lib/cloud/client";
+import { teardownProject } from "./project-teardown";
+import type { RequestContext } from "../../lib/request-context";
 
 // ─── Typed errors ────────────────────────────────────────────────────────────
 
@@ -115,7 +119,6 @@ export interface TransferToCloudInput {
 
 export interface TransferToCloudResult {
   projectId: string;
-  cloudWorkspaceId: string;
   imported: Record<string, number>;
 }
 
@@ -161,27 +164,60 @@ export async function transferProjectToCloud(
     throw new TransferCloudCallFailedError(result.error);
   }
 
-  // 4) Mark the local project as cloud-hosted. The SaaS reuses the same
-  //    project.id (only organizationId is remapped), so cloudWorkspaceId
-  //    is the project id itself for now — a future API iteration could
-  //    return a distinct cloud workspace id.
-  const cloudWorkspaceId = project.id;
-  await db
-    .update(schema.project)
-    .set({ cloudWorkspaceId, updatedAt: new Date() })
-    .where(eq(schema.project.id, project.id));
-
-  // TODO (business-logic phase, NOT in this change):
-  //   - tear down containers/services on the source machine
-  //   - hand DNS records over (if any custom domains)
-  //   - re-bind the GitHub installation to the cloud org
-  //   - issue an audit_event row referencing both ends
-  //   - guard against a concurrent deploy in flight at dump-time
+  // 4) Ingest succeeded — the SaaS now owns this project (cloud-as-source).
+  //    The CALLER (transfer.controller) tears down the local runtime AND drops
+  //    the local rows via teardownProject({ preserveWebhook: true }) — that
+  //    reuses the tested teardown path so a promoted project leaves no orphaned
+  //    local container, while keeping the GitHub webhook for the cloud copy.
+  //    We deliberately do NOT touch local state here so a teardown failure is
+  //    reported as recoverable drift rather than a half-deleted project.
+  //
+  // Remaining follow-up (operational, not data): hand custom-domain DNS over to
+  // the cloud workspace; the local routes are removed by the teardown but DNS
+  // re-pointing for user-managed domains is the operator's step.
 
   return {
     projectId: project.id,
-    cloudWorkspaceId,
     imported: result.imported,
+  };
+}
+
+export interface PromoteToCloudResult {
+  projectId: string;
+  imported: Record<string, number>;
+  /** False when ingest succeeded but local teardown couldn't drop the row (drift). */
+  localRemoved: boolean;
+  /** >0 means the row dropped but some local resource needs manual cleanup. */
+  unrecoverableSteps: number;
+}
+
+/**
+ * PROMOTE a local project to Openship Cloud: ingest its subgraph to the SaaS
+ * (which becomes the source of truth), then tear down the local runtime + rows
+ * via the tested teardown path (keeping the GitHub webhook, since the cloud
+ * copy still auto-deploys). Single orchestration reused by BOTH the explicit
+ * `/transfer/to-cloud` route AND born-on-cloud (first cloud deploy).
+ *
+ * Throws (from transferProjectToCloud) if the project is already on cloud or
+ * the org isn't connected — callers surface those.
+ */
+export async function promoteProjectToCloud(
+  ctx: RequestContext,
+  projectId: string,
+): Promise<PromoteToCloudResult> {
+  const { imported } = await transferProjectToCloud({
+    projectId,
+    organizationId: ctx.organizationId,
+  });
+  const teardown = await teardownProject(ctx, projectId, {
+    force: true,
+    preserveWebhook: true,
+  });
+  return {
+    projectId,
+    imported,
+    localRemoved: teardown.rowDeleted,
+    unrecoverableSteps: teardown.unrecoverable.length,
   };
 }
 

@@ -37,6 +37,7 @@ import { resolveProjectTrafficSource, fetchMgmt, mgmtStream } from "../../lib/pr
 import { refreshProjectFaviconIfStale } from "../../lib/favicon-detector";
 import { getAdminOblienClient } from "../../lib/oblien-user-client";
 import { cloudClient } from "../../lib/cloud/client";
+import { resolveOrgCloudUserId, readCloudJson } from "../../lib/cloud/transport";
 import {
   registerWebhook,
   updateWebhook,
@@ -121,6 +122,38 @@ export async function ensure(c: Context) {
 }
 
 // ─── Projects CRUD ───────────────────────────────────────────────────────────
+
+/**
+ * Cloud-as-source merge: fetch the org's CLOUD projects from the SaaS (proxied
+ * as the org owner) so the local home list shows local + cloud in one view.
+ *   - not-connected: org has no cloud link → caller shows local only (no flag).
+ *   - unavailable:   linked but the SaaS call failed/non-JSON → caller shows
+ *                    local only + `cloudPartial:true` so the UI can warn.
+ *   - merged:        the SaaS projects + numbers.
+ */
+async function fetchCloudHomeProjects(
+  organizationId: string,
+): Promise<
+  | { state: "merged"; projects: Array<Record<string, unknown>>; numbers: Record<string, number> }
+  | { state: "not-connected" }
+  | { state: "unavailable" }
+> {
+  // On the SaaS we ARE the source — never merge-from-self (no proxy recursion).
+  if (env.CLOUD_MODE) return { state: "not-connected" };
+  const linked = await resolveOrgCloudUserId(organizationId).catch(() => null);
+  if (!linked) return { state: "not-connected" };
+  const res = await cloudClient({ organizationId })
+    .request("/api/projects/home", { method: "GET" })
+    .catch(() => null);
+  if (!res || !res.ok) return { state: "unavailable" };
+  const body = await readCloudJson<{ projects?: unknown[]; numbers?: Record<string, number> }>(res);
+  if (!body || !Array.isArray(body.projects)) return { state: "unavailable" };
+  return {
+    state: "merged",
+    projects: body.projects as Array<Record<string, unknown>>,
+    numbers: body.numbers ?? {},
+  };
+}
 
 export async function getHome(c: Context) {
   const ctx = getRequestContext(c);
@@ -239,15 +272,41 @@ export async function getHome(c: Context) {
     }
   }
 
+  // Cloud-as-source merge: local projects (this DB) + cloud projects (proxied
+  // from the SaaS as the org owner), tagged with `source` so the dashboard can
+  // badge them and replay the source hint on subsequent calls.
+  const localProjects = projects.map((p) => ({ ...p, source: "local" as const }));
+  const cloud = await fetchCloudHomeProjects(organizationId);
+
+  let mergedProjects: unknown[] = localProjects;
+  let cloudProjectCount = 0;
+  let cloudPartial = false;
+  if (cloud.state === "merged") {
+    const localIds = new Set(localProjects.map((p) => (p as { id: string }).id));
+    const cloudProjects = cloud.projects
+      .filter((p) => !localIds.has((p.id as string) ?? ""))
+      .map((p) => ({ ...p, source: "cloud" as const }));
+    mergedProjects = [...localProjects, ...cloudProjects];
+    cloudProjectCount =
+      Number(cloud.numbers.total_projects ?? cloudProjects.length) || cloudProjects.length;
+  } else if (cloud.state === "unavailable") {
+    cloudPartial = true;
+  }
+
+  // The "projects in other orgs" nudge is only useful when the view is truly
+  // empty — suppress it once we have any project to show (local or cloud).
+  if (mergedProjects.length > 0) otherOrgs = [];
+
   return c.json({
     success: true,
-    projects,
+    projects: mergedProjects,
     numbers: {
-      total_projects: result.total,
+      total_projects: result.total + cloudProjectCount,
       total_deployments: 0,
       total_success_deployments: 0,
     },
     otherOrgs,
+    ...(cloudPartial ? { cloudPartial: true } : {}),
   });
 }
 
@@ -260,8 +319,11 @@ export async function list(c: Context) {
   result.rows.forEach((project) => {
     refreshProjectFaviconIfStale(project);
   });
+  // Tag source for consistency with the home merge. Cloud-project merge for
+  // this paginated endpoint is deferred (the dashboard list uses getHome); the
+  // tag keeps the field shape uniform for clients that read /projects.
   return c.json({
-    data: result.rows,
+    data: result.rows.map((p) => ({ ...p, source: "local" as const })),
     total: result.total,
     page: result.page,
     perPage: result.perPage,

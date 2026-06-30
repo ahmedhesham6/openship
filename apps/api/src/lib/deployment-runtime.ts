@@ -167,6 +167,14 @@ export async function resolveDeploymentPlatform(
     };
   }
 
+  // Invariant (cloud-as-source): a multi-user self-hosted server never reaches
+  // a cloud target here — resolveEffectiveTarget() collapses cloud→local/server
+  // for the "selfhosted" base, and cloud projects are proxied to the SaaS by the
+  // gateway before the pipeline runs. So the cloud-platform resolution below is
+  // only ever reached by the SaaS itself (basePlatform.target === "cloud") or by
+  // desktop (single-user, owner-driven) — never by a self-hosted server. That is
+  // what keeps the local cloud-capability path (pages/managed edge) off a
+  // self-hosted box.
   const needsOrgScopedCloudPlatform =
     (effectiveTarget === "cloud" && !env.CLOUD_MODE && basePlatform.target !== "cloud") ||
     (!env.CLOUD_MODE && basePlatform.target === "cloud");

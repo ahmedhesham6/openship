@@ -34,12 +34,15 @@ export function buildDesktopAuthorizeUrl(options: {
 
 export function getCloudConnectHandoffUrl(
   callbackUrl: string,
-  options?: { state?: string | null; codeChallenge?: string | null },
+  // cloudApiUrl: the API-provided cloud origin (respects OPENSHIP_CLOUD_TARGET).
+  // Pass it so self-hosted → cloud connect hits the configured cloud, not the
+  // static table default (api.openship.io).
+  options?: { state?: string | null; codeChallenge?: string | null; cloudApiUrl?: string },
 ) {
   const params = new URLSearchParams({ redirect: callbackUrl });
   if (options?.state) params.set("state", options.state);
   if (options?.codeChallenge) params.set("code_challenge", options.codeChallenge);
-  return `${getCloudApiOrigin()}/api/cloud/connect-handoff?${params.toString()}`;
+  return `${getCloudApiOrigin(options?.cloudApiUrl)}/api/cloud/connect-handoff?${params.toString()}`;
 }
 
 /* ── PKCE helpers (browser-only) ─────────────────────────────────── */
@@ -107,6 +110,7 @@ export function getCloudDesktopHandoffUrl(options: {
   callbackUrl: string;
   state?: string | null;
   codeChallenge?: string | null;
+  cloudApiUrl?: string;
 }) {
   const params = new URLSearchParams({
     redirect: options.callbackUrl,
@@ -114,7 +118,7 @@ export function getCloudDesktopHandoffUrl(options: {
     ...(options.codeChallenge ? { code_challenge: options.codeChallenge } : {}),
   });
 
-  return `${getCloudApiOrigin()}/api/cloud/desktop-handoff?${params.toString()}`;
+  return `${getCloudApiOrigin(options.cloudApiUrl)}/api/cloud/desktop-handoff?${params.toString()}`;
 }
 
 export function buildAuthPageHref(route: "/login" | "/register" | "/authorize", searchParams: SearchParamsLike) {

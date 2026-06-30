@@ -1,7 +1,5 @@
 import "server-only";
 import { cache } from "react";
-import { headers } from "next/headers";
-import { getFallbackDeploymentInfoFromHeaders } from "@/lib/api/urls";
 import { serverApi, ServerApiError } from "./api";
 
 /**
@@ -85,6 +83,7 @@ export type DeploymentInfo = {
   deployMode: string;
   authMode: "cloud" | "local" | "none";
   cloudAuthUrl: string;
+  cloudApiUrl: string;
   machineName?: string;
   hostDomain?: string;
   /**
@@ -138,17 +137,25 @@ export async function getDeploymentInfo(
     return _deploymentInfo;
   }
 
-  const requestHeaders = await headers();
-
   try {
     _deploymentInfo = await serverApi.get<DeploymentInfo>("health/env");
     _deploymentInfoFetchedAt = Date.now();
-  } catch {
+  } catch (err) {
+    // Last-known-good beats a transient refetch failure.
     if (_deploymentInfo) {
       return _deploymentInfo;
     }
 
-    return getFallbackDeploymentInfoFromHeaders(requestHeaders);
+    // No cache + API unreachable. deployMode/authMode are REQUIRED and only the
+    // API knows them — fabricating a value would render the wrong login flow.
+    // Fail loud (same philosophy as runtime-config's invalid-target throw)
+    // rather than guess; the orchestrator brings the API up before serving the
+    // dashboard, so this only fires if the API is genuinely down.
+    throw new Error(
+      "Cannot resolve deployment info: GET /health/env is unreachable and nothing is cached. " +
+        "The dashboard refuses to render with a guessed deploy/auth mode — ensure the API is running.",
+      { cause: err },
+    );
   }
   return _deploymentInfo;
 }

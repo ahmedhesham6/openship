@@ -106,6 +106,13 @@ export interface TeardownOptions {
   force: boolean;
   /** wipeVolumes is plumbed through to the runtime manifest. */
   wipeVolumes?: boolean;
+  /**
+   * Keep the GitHub webhook instead of unregistering it. Used by
+   * promote-to-cloud: the project's data has been copied to the SaaS, which
+   * keeps using the SAME webhook to auto-deploy — so we tear down the local
+   * runtime + rows but must NOT delete the webhook.
+   */
+  preserveWebhook?: boolean;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -256,8 +263,14 @@ export async function teardownProject(
       push({ step: "cancel_in_flight", status: "skipped", details: "force=false" });
     }
 
-    // ── Step 2: Unregister GitHub webhook. ───────────────────────────────
-    await stepDeleteWebhook(ctx, project, push);
+    // ── Step 2: Unregister GitHub webhook (unless preserving it). ────────
+    // promote-to-cloud keeps the webhook: the cloud copy auto-deploys via the
+    // same hook, so deleting it here would break the now-cloud project.
+    if (opts.preserveWebhook) {
+      push({ step: "github_webhook", status: "skipped", details: "preserved (promote to cloud)" });
+    } else {
+      await stepDeleteWebhook(ctx, project, push);
+    }
 
     // ── Step 3: Tear down runtime + edge + pages + routes + volumes via
     //   the existing manifest executor. Cloud workspaces destroy through

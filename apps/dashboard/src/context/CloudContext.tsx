@@ -89,7 +89,7 @@ const FEATURES = [
 ];
 
 export function CloudProvider({ children }: { children: ReactNode }) {
-  const { selfHosted, deployMode, cloudAuthUrl } = usePlatform();
+  const { selfHosted, deployMode, cloudAuthUrl, cloudApiUrl } = usePlatform();
   const canConnectCloud = canUseCloudConnection({ selfHosted, deployMode });
   const hasNativeCloudAccess = !canConnectCloud;
   // GitHubProvider is an ancestor of CloudProvider (see providers.tsx),
@@ -245,8 +245,9 @@ export function CloudProvider({ children }: { children: ReactNode }) {
     return getCloudConnectHandoffUrl(callbackUrl, {
       state: flowId,
       codeChallenge: challenge,
+      cloudApiUrl,
     });
-  }, [callbackUrl]);
+  }, [callbackUrl, cloudApiUrl]);
 
   /** Desktop IPC connect flow with PKCE + nonce polling */
   const startDesktopConnect = useCallback(async () => {

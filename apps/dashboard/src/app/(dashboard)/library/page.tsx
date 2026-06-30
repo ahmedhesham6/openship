@@ -39,7 +39,7 @@ export default function LibraryPage() {
     installUrl,
   } = useGitHub();
   const { selfHosted } = usePlatform();
-  const { connected: cloudConnected } = useCloud();
+  const { connected: cloudConnected, startConnect: startCloudConnect } = useCloud();
 
   const [activeTab, setActiveTab] = useState<Tab>(selfHosted ? "local" : "repositories");
 
@@ -104,7 +104,15 @@ export default function LibraryPage() {
             ) : loading ? (
               <LoadingSkeleton />
             ) : !connected ? (
-              <ConnectPrompt connecting={connecting} onConnect={connect} cliAction={cliAction} onRefresh={refresh} />
+              <ConnectPrompt
+                connecting={connecting}
+                onConnect={connect}
+                cliAction={cliAction}
+                onRefresh={refresh}
+                selfHosted={selfHosted}
+                cloudConnected={cloudConnected}
+                onConnectCloud={startCloudConnect}
+              />
             ) : (
               <RepositoryList
                 repos={repos}

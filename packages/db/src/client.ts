@@ -39,10 +39,19 @@ const MIGRATIONS_DIR = resolve(__dirname, "../drizzle");
  *   2) Default: ~/.openship/data  (outside the project, won't be committed)
  */
 function resolvePgliteDataDir(): string {
-  const explicit = process.env.PGLITE_DATA_DIR;
-  if (explicit) return resolve(explicit);
-
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
+
+  const explicit = process.env.PGLITE_DATA_DIR;
+  if (explicit) {
+    // Expand a leading ~ ourselves: env files (loaded via `node --env-file`) do
+    // NOT shell-expand, so `PGLITE_DATA_DIR=~/.openship/data-saas` would
+    // otherwise resolve literally. `resolve` handles relative paths from cwd.
+    const expanded = explicit === "~" || explicit.startsWith("~/")
+      ? resolve(home, explicit.slice(1).replace(/^\/+/, ""))
+      : explicit;
+    return resolve(expanded);
+  }
+
   return resolve(home, ".openship", "data");
 }
 

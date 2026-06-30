@@ -91,7 +91,10 @@ healthRoutes.get("/env", async (c) => {
     teamMode,
     migrationTargetUrl,
     migrationInProgress,
+    // Both respect OPENSHIP_CLOUD_TARGET (cloudRuntimeTarget). The dashboard
+    // must use these, not its static table, to reach the right cloud.
     cloudAuthUrl: cloudRuntimeTarget.dashboard,
+    cloudApiUrl: cloudRuntimeTarget.api,
     ...(machineName && { machineName }),
     ...(env.HOST_DOMAIN && { hostDomain: env.HOST_DOMAIN }),
   });

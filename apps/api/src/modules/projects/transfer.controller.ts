@@ -16,13 +16,13 @@ import { param } from "../../lib/controller-helpers";
 import { getRequestContext } from "../../lib/request-context";
 import { safeErrorMessage } from "@repo/core";
 import {
-  transferProjectToCloud,
   transferProjectToSelfHosted,
   TransferAlreadyOnTargetError,
   TransferConflictError,
   TransferNotConnectedError,
   TransferCloudCallFailedError,
   TransferProjectNotFoundError,
+  promoteProjectToCloud,
 } from "./transfer.service";
 
 type StatusCode = 400 | 404 | 409 | 412 | 502 | 500;
@@ -69,14 +69,46 @@ function transferErrorResponse(c: Context, err: unknown, fallback: string) {
  */
 export async function transferToCloud(c: Context) {
   const projectId = param(c, "id");
-  const organizationId = getRequestContext(c).organizationId;
+  const ctx = getRequestContext(c);
+  const organizationId = ctx.organizationId;
 
   try {
-    const result = await transferProjectToCloud({ projectId, organizationId });
+    const result = await promoteProjectToCloud(ctx, projectId);
+
+    if (!result.localRemoved) {
+      // Cloud copy exists, but the local project couldn't be removed → drift.
+      // 207 so the dashboard can warn and offer "finish local cleanup"; the
+      // cloud copy is authoritative.
+      return c.json(
+        {
+          ok: false,
+          code: "PROMOTE_LOCAL_CLEANUP_FAILED",
+          projectId: result.projectId,
+          imported: result.imported,
+          message:
+            "Promoted to cloud, but local cleanup failed. Retry to remove the local copy.",
+        },
+        207,
+      );
+    }
+
+    if (result.unrecoverableSteps > 0) {
+      // Row gone, but a local resource (e.g. a leaked container) needs manual
+      // cleanup. Promote succeeded; surface the stragglers.
+      return c.json(
+        {
+          ok: true,
+          projectId: result.projectId,
+          imported: result.imported,
+          warning: "Promoted to cloud; some local resources need manual cleanup.",
+        },
+        207,
+      );
+    }
+
     return c.json({
       ok: true,
       projectId: result.projectId,
-      cloudWorkspaceId: result.cloudWorkspaceId,
       imported: result.imported,
     });
   } catch (err) {

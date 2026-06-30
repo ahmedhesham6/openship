@@ -11,6 +11,7 @@ interface DashboardProvidersProps {
   deployMode: string;
   authMode: "cloud" | "local" | "none";
   cloudAuthUrl: string;
+  cloudApiUrl: string;
   machineName?: string;
   hostDomain?: string;
   initialUser?: AuthUser | null;
@@ -25,6 +26,7 @@ export function DashboardProviders({
   deployMode,
   authMode,
   cloudAuthUrl,
+  cloudApiUrl,
   machineName,
   hostDomain,
 }: DashboardProvidersProps) {
@@ -35,6 +37,7 @@ export function DashboardProviders({
         deployMode={deployMode}
         authMode={authMode}
         cloudAuthUrl={cloudAuthUrl}
+        cloudApiUrl={cloudApiUrl}
         machineName={machineName}
         hostDomain={hostDomain}
       >

@@ -26,8 +26,7 @@ export const CLOUD_API_URL = "https://api.openship.io";
  *   OPENSHIP_TARGET=local        (default — self-hosted; talks to cloud-saas)
  *   OPENSHIP_TARGET=cloud-saas   (the SaaS — api.openship.io in prod, or a
  *                                tunneled localhost during dev:saas)
- *   OPENSHIP_TARGET=local-saas   (DISABLED — uncomment the row to enable a
- *                                localhost-only SaaS for dev without
+ *   OPENSHIP_TARGET=local-saas   (a localhost-only SaaS for dev without
  *                                tunneling api.openship.io)
  *
  * No NODE_ENV magic, no CLOUD_MODE-based inference. Invalid value
@@ -40,31 +39,33 @@ export const DASHBOARD_RUNTIME_TARGETS = {
     ports: { dashboard: DEFAULT_PORT.dashboard, api: DEFAULT_PORT.api },
     cloudTargetId: "cloud-saas",
     selfHosted: true,
-    deployMode: "docker",
-    authMode: "local",
   },
-  // "local-saas": {
-  //   dashboard: localhost(DEFAULT_PORT.saasDashboard),
-  //   api: localhost(DEFAULT_PORT.saasApi),
-  //   ports: { dashboard: DEFAULT_PORT.saasDashboard, api: DEFAULT_PORT.saasApi },
-  //   // Self-referential — dev:saas IS the SaaS when this row is active,
-  //   // so cloud calls land back on itself at localhost:4100 instead of
-  //   // round-tripping to api.openship.io.
-  //   cloudTargetId: "local-saas",
-  //   selfHosted: false,
-  //   deployMode: "cloud",
-  //   authMode: "local",
-  // },
+  "local-saas": {
+    dashboard: localhost(DEFAULT_PORT.saasDashboard),
+    api: localhost(DEFAULT_PORT.saasApi),
+    ports: { dashboard: DEFAULT_PORT.saasDashboard, api: DEFAULT_PORT.saasApi },
+    // Self-referential — dev:saas IS the SaaS when this row is active,
+    // so cloud calls land back on itself at localhost:4100 instead of
+    // round-tripping to api.openship.io.
+    cloudTargetId: "local-saas",
+    selfHosted: false,
+  },
   "cloud-saas": {
     dashboard: CLOUD_DASHBOARD_URL,
     api: CLOUD_API_URL,
     ports: { dashboard: DEFAULT_PORT.saasDashboard, api: DEFAULT_PORT.saasApi },
     cloudTargetId: "cloud-saas",
     selfHosted: false,
-    deployMode: "cloud",
-    authMode: "local",
   },
 } as const;
+
+// NOTE: this table is the source of truth for WHO an instance is (identity,
+// URLs, ports) + whether it's self-hosted. It deliberately does NOT carry
+// deploy/build mode (docker | bare | cloud | desktop): that's an orthogonal
+// axis a single instance varies independently (a self-hosted box runs docker,
+// bare, or desktop), owned by the API's env (DEPLOY_MODE/CLOUD_MODE) and
+// surfaced to the dashboard via GET /health/env. Keeping a copy here only bred
+// drift (e.g. local→"docker" while DEPLOY_MODE=desktop).
 
 export type DashboardRuntimeTargetId = keyof typeof DASHBOARD_RUNTIME_TARGETS;
 export type DashboardRuntimeTarget = (typeof DASHBOARD_RUNTIME_TARGETS)[DashboardRuntimeTargetId];
@@ -82,7 +83,18 @@ if (!(rawTarget in DASHBOARD_RUNTIME_TARGETS)) {
 
 export const runtimeTargetId = rawTarget as DashboardRuntimeTargetId;
 export const runtimeTarget = DASHBOARD_RUNTIME_TARGETS[runtimeTargetId];
-export const cloudRuntimeTargetId = runtimeTarget.cloudTargetId;
+
+// Optional override for WHERE "cloud" points. A self-hosted instance normally
+// talks to cloud-saas (api.openship.io); set OPENSHIP_CLOUD_TARGET=local-saas to
+// point it at a localhost SaaS (localhost:4100) for end-to-end local testing.
+// Unset/invalid → falls back to the active target's own cloudTargetId, so
+// production self-hosted is unaffected (no env = cloud-saas as before).
+const rawCloudTarget =
+  typeof process !== "undefined" ? process.env?.OPENSHIP_CLOUD_TARGET : undefined;
+export const cloudRuntimeTargetId: DashboardRuntimeTargetId =
+  rawCloudTarget && rawCloudTarget in DASHBOARD_RUNTIME_TARGETS
+    ? (rawCloudTarget as DashboardRuntimeTargetId)
+    : runtimeTarget.cloudTargetId;
 export const cloudRuntimeTarget = DASHBOARD_RUNTIME_TARGETS[cloudRuntimeTargetId];
 
 // Every dashboard + api origin from the table — used for CORS allowlists.

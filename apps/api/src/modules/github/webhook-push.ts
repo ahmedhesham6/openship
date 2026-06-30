@@ -239,10 +239,17 @@ async function triggerBranchDeployments(
     );
 
     if (autoDeployProjects.length === 0) {
+      // No matching LOCAL project. This is an intentional no-op, not an error:
+      // cloud-as-source projects are canonical on the SaaS and use the GitHub
+      // App, so GitHub delivers their pushes to the SaaS (which deploys them) —
+      // never to this self-hosted box. A self-hosted box only auto-deploys the
+      // local projects whose repo/domain webhook points at it. (Auto-deploy for
+      // a REPO-strategy project that was later promoted to cloud is a known
+      // follow-up: its webhook should be re-bound to the SaaS App.)
       console.log(
-        `[GitHub Webhook] ${input.event} for ${input.owner}/${input.repo}#${input.branch} - no matching auto-deploy projects`,
+        `[GitHub Webhook] ${input.event} for ${input.owner}/${input.repo}#${input.branch} - no matching LOCAL auto-deploy project (cloud projects deploy via the SaaS)`,
       );
-      return { success: true, event: input.event, message: "No auto-deploy projects matched" };
+      return { success: true, event: input.event, message: "No local auto-deploy projects matched" };
     }
 
     const results = await Promise.allSettled(

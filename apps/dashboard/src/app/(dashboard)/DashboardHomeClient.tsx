@@ -7,7 +7,6 @@ import {
   FolderKanban,
   Rocket,
   ArrowRight,
-  Plus,
   ExternalLink,
   Clock,
   BookOpen,
@@ -17,12 +16,11 @@ import {
   Activity,
   TrendingUp,
   CheckCircle2,
-  FolderPlus,
-  Github,
 } from "lucide-react";
 import { projectsApi } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import HomeTipCard from "@/components/overview/HomeTipCard";
+import HomeWelcome from "@/components/overview/HomeWelcome";
 import { useI18n } from "@/components/i18n-provider";
 import { getProjectStatus, PROJECT_STATUS_META } from "@/utils/project-status";
 import { PageContainer } from "@/components/ui/PageContainer";
@@ -135,33 +133,7 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
                   ))}
                 </div>
               ) : projects.length === 0 ? (
-                <div className="px-6 py-16 text-center">
-                  <div className="w-14 h-14 rounded-2xl bg-muted/60 border border-border/50 flex items-center justify-center mx-auto mb-5">
-                    <FolderPlus className="size-6 text-muted-foreground/70" />
-                  </div>
-                  <h3 className="text-base font-medium text-foreground/90 mb-1.5">
-                    No projects yet
-                  </h3>
-                  <p className="text-sm text-muted-foreground max-w-xs mx-auto mb-6 leading-relaxed">
-                    Create your first project to get started.
-                  </p>
-                  <div className="flex flex-col items-center gap-3">
-                    <Link
-                      href="/library"
-                      className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground text-sm font-medium rounded-xl hover:bg-primary/90 transition-colors"
-                    >
-                      <Plus className="size-4" />
-                      Create project
-                    </Link>
-                    <Link
-                      href="/library"
-                      className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      <Github className="size-3.5" />
-                      Import from GitHub
-                    </Link>
-                  </div>
-                </div>
+                <HomeWelcome />
               ) : (
                 <div className="divide-y divide-border/50">
                   {projects.slice(0, 6).map((p) => (

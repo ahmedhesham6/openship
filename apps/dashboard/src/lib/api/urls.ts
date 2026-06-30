@@ -1,4 +1,4 @@
-import { DASHBOARD_RUNTIME_TARGETS, DEFAULT_PORT, type DashboardRuntimeTarget } from "@repo/core";
+import { DASHBOARD_RUNTIME_TARGETS, DEFAULT_PORT } from "@repo/core";
 
 // The runtime-target table, flattened to an array with the id inlined
 // for browser-side lookup ("which row matches window.location?").
@@ -133,18 +133,3 @@ export function getMarketingOrigin() {
   return "https://openship.io";
 }
 
-type DeploymentInfoFallback = Pick<DashboardRuntimeTarget, "selfHosted" | "deployMode" | "authMode"> & {
-  cloudAuthUrl: string;
-};
-
-export function getFallbackDeploymentInfoFromHeaders(
-  headers: Pick<Headers, "get">,
-): DeploymentInfoFallback {
-  const target = resolveTarget(getRequestOriginFromHeaders(headers));
-  return {
-    selfHosted: target.selfHosted,
-    deployMode: target.deployMode,
-    authMode: target.authMode,
-    cloudAuthUrl: cloudPartner(target).dashboard,
-  };
-}

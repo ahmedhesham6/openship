@@ -7,6 +7,7 @@
 
 import { Hono } from "hono";
 import { secureRouter } from "../../lib/secure-router";
+import { cloudProjectProxyByQuery } from "../../lib/cloud/project-router";
 import * as ctrl from "./analytics.controller";
 
 const r = secureRouter(new Hono(), {
@@ -14,23 +15,26 @@ const r = secureRouter(new Hono(), {
   basePath: "/api/analytics",
 });
 
-/* All analytics routes require authentication */
+/* All analytics routes require authentication. Project-scoped analytics carry
+   the project id in the QUERY (?projectId=), so cloudProjectProxyByQuery (after
+   the permission middleware) forwards them to the SaaS for a cloud project and
+   no-ops for org-wide requests. */
 
 /* ─── Request analytics ────────────────────────────────────────────────── */
-r.get("/", { tag: "analytics:read" }, ctrl.summary);
-r.get("/periods", { tag: "analytics:read" }, ctrl.periods);
-r.get("/overview", { tag: "analytics:read" }, ctrl.overview);
+r.get("/", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.summary);
+r.get("/periods", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.periods);
+r.get("/overview", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.overview);
 
 /* ─── Deployment stats ─────────────────────────────────────────────────── */
-r.get("/deployments", { tag: "analytics:read" }, ctrl.deploymentStats);
+r.get("/deployments", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.deploymentStats);
 
 /* ─── Resource usage ───────────────────────────────────────────────────── */
-r.get("/usage", { tag: "analytics:read" }, ctrl.usage);
-r.get("/usage/stream", { tag: "analytics:read" }, ctrl.usageStream);
-r.get("/container", { tag: "analytics:read" }, ctrl.containerInfo);
+r.get("/usage", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.usage);
+r.get("/usage/stream", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.usageStream);
+r.get("/container", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.containerInfo);
 
 /* ─── Dashboard ────────────────────────────────────────────────────────── */
-r.get("/dashboard", { tag: "analytics:read" }, ctrl.dashboard);
+r.get("/dashboard", { tag: "analytics:read" }, cloudProjectProxyByQuery, ctrl.dashboard);
 
 /* ─── Server analytics (scraped from OpenResty mgmt API) ───────────────── */
 r.get(

@@ -12,6 +12,8 @@ import * as deploymentService from "./deployment.service";
 import * as buildService from "./build.service";
 import * as sslService from "./ssl.service";
 import * as prepareService from "./prepare.service";
+import { maybeProxyCloudProject, proxyToSaaS } from "../../lib/cloud/project-router";
+import { promoteProjectToCloud } from "../projects/transfer.service";
 import { env } from "../../config";
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -55,6 +57,12 @@ export async function create(c: Context) {
   }>();
   if (body.projectId) {
     await permission.assert(getRequestContext(c), { resourceType: "project", resourceId: body.projectId, action: "write" });
+    // Cloud-as-source: a cloud project's deploy runs on the SaaS; proxy it as
+    // the org owner. The local box does zero orchestration for cloud projects.
+    const proxied = await maybeProxyCloudProject(c, body.projectId, getRequestContext(c).organizationId, {
+      body: JSON.stringify(body),
+    });
+    if (proxied) return proxied;
   }
   // Construct the triggerDeployment arg from an explicit ALLOWLIST — never
   // forward the raw body. triggerDeployment has internal-only fields
@@ -313,6 +321,33 @@ export async function buildAccess(c: Context) {
   }
 
   await permission.assert(getRequestContext(c), { resourceType: "project", resourceId: body.projectId, action: "write" });
+
+  // Cloud-as-source: an already-cloud project's build/deploy runs on the SaaS —
+  // proxy it as the org owner; the local box does no orchestration.
+  const proxied = await maybeProxyCloudProject(c, body.projectId, getRequestContext(c).organizationId, {
+    body: JSON.stringify(body),
+  });
+  if (proxied) return proxied;
+
+  // Born-on-cloud (SELF-HOSTED ONLY): a LOCAL project chosen for a CLOUD deploy
+  // is promoted to the SaaS FIRST (ingest + local teardown), so it never exists
+  // as a "local project using cloud pages/compute" hybrid — then the deploy
+  // proxies and runs entirely on the SaaS. Promote throws BEFORE any local
+  // teardown if the SaaS ingest fails, so the local project is left intact.
+  //
+  // On the SaaS itself (CLOUD_MODE) there is NOTHING to promote — the project is
+  // already canonical here — so skip and let the deploy run natively below.
+  if (!env.CLOUD_MODE && body.deployTarget === "cloud") {
+    try {
+      await promoteProjectToCloud(getRequestContext(c), body.projectId);
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      const message =
+        err instanceof Error ? err.message : "Failed to move project to Openship Cloud";
+      return c.json({ success: false, message }, 400);
+    }
+    return proxyToSaaS(c, getRequestContext(c).organizationId, { body: JSON.stringify(body) });
+  }
 
   try {
     const result = await buildService.requestBuildAccess(ctx, body);

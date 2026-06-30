@@ -34,6 +34,8 @@ import { NotFoundError } from "@repo/core";
 import { repos } from "@repo/db";
 import type { Permission, ResourceType } from "@repo/db";
 import { getRequestContext, withScopedOrg, type RequestContext } from "./request-context";
+import { env } from "../config";
+import { resolveOrgCloudUserId } from "./cloud/transport";
 
 /** Grantable resource roots — the types that can be the target of a grant. */
 const GRANTABLE_ROOTS: ResourceType[] = [
@@ -55,6 +57,12 @@ const GRANTABLE_ROOTS: ResourceType[] = [
   "domain",
   "settings",
   "terminal",
+  // Org-singleton feature. INVARIANT: every cloud operation reaches the SaaS
+  // ONLY through a local API route that is permission-tagged and resolved here
+  // — the local permission plane gates access (coarsely, by role) before any
+  // proxy. Cloud PROJECT data is canonical on the SaaS, which is the
+  // authoritative per-project gate; the local gate stays coarse on purpose
+  // (tightening it into a second source of truth re-introduces split-brain).
   "cloud",
 ];
 
@@ -230,6 +238,41 @@ export function resolveRequestScopeOrg(c: Context): string | null {
   return null;
 }
 
+/**
+ * Project-rooted resource types — the ones that, when absent from the local DB,
+ * may be a CLOUD project (canonical on the SaaS) rather than genuinely missing.
+ */
+const PROJECT_ROOTED: ReadonlySet<CheckedResourceType> = new Set([
+  "project",
+  "deployment",
+  "domain",
+  "service",
+  "env_var",
+  "build_session",
+]);
+
+/**
+ * Cloud fallback for the org lookup in `assert`: when a project-rooted resource
+ * has no local row, it may live on the SaaS. Return the request-scope org IFF
+ * that org has a cloud link to proxy through; otherwise null (→ 404, IDOR-safe).
+ *
+ * The role check in `checkPermission` then runs against this org: owner/admin/
+ * member pass; `restricted` is denied (its grant path needs a local resource,
+ * which doesn't exist — per-cloud-project grants are deferred). The SaaS remains
+ * the authoritative per-project gate; a bogus id still 404s once proxied.
+ */
+async function resolveCloudFallbackOrg(
+  c: Context,
+  resourceType: CheckedResourceType,
+): Promise<string | null> {
+  if (env.CLOUD_MODE) return null; // the SaaS IS canonical — no upstream to fall back to
+  if (!PROJECT_ROOTED.has(resourceType)) return null;
+  const scopeOrg = resolveRequestScopeOrg(c);
+  if (!scopeOrg) return null;
+  const ownerUserId = await resolveOrgCloudUserId(scopeOrg).catch(() => null);
+  return ownerUserId ? scopeOrg : null;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
@@ -340,7 +383,11 @@ export async function assert(ctx: RequestContext, input: PermissionInput): Promi
     organizationId = resolveRequestScopeOrg(c);
   } else {
     const resource = await resolveResourceOrg(input.resourceType, input.resourceId);
-    organizationId = resource?.orgId ?? null;
+    // No local row for a project-rooted resource may mean it's a CLOUD project
+    // (canonical on the SaaS, no local row). Fall back to the request-scope org
+    // when it has a cloud link, then gate by role below; the proxy and the SaaS
+    // enforce actual existence/ownership (a bogus id still 404s — no leak).
+    organizationId = resource?.orgId ?? (await resolveCloudFallbackOrg(c, input.resourceType));
   }
 
   if (!organizationId) {
