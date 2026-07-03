@@ -81,7 +81,7 @@ import type {
   MakeActiveResult,
 } from "./types";
 import { BuildLogger, parseLogLevel, sq } from "./build-pipeline";
-import { createDockerBuildContext } from "./docker-build-context";
+import { createDockerBuildContext, prepareSourceTree, resolveServiceDockerfile } from "./docker-build-context";
 import { transferLocalDirectory } from "./transfer";
 import { safeErrorMessage, type ComposeAdvanced, type ComposeHealthcheck } from "@repo/core";
 import {
@@ -546,91 +546,99 @@ export class DockerRuntime implements RuntimeAdapter {
    * Container lifecycle (deploy, stop, logs, etc.) still uses dockerode -
    * only the slow build upload moves to this path.
    */
-  private async buildViaSshTarPipe(
+  /**
+   * Ship a prepared context dir to the remote host (rsync via system ssh with
+   * native --progress; tar/ssh2 fallback). Reused by both the single-image SSH
+   * build and the batch build (which transfers the shared context ONCE).
+   */
+  private async transferBuildContext(
+    contextDir: string,
+    remoteContextDir: string,
+    log: BuildLogger,
+  ): Promise<void> {
+    const executor = this.connectionOptions?.executor;
+    if (!executor) throw new Error("SSH build path requires an executor on connectionOptions");
+
+    log.log(`Streaming build context to ${remoteContextDir}...`);
+    // Wipe stale dir from a previous failed deploy, if any. -rf is safe - the
+    // path is namespaced and only ever holds the context we just transferred.
+    await executor.exec(`rm -rf ${sq(remoteContextDir)} && mkdir -p ${sq(remoteContextDir)}`);
+    await transferLocalDirectory(
+      contextDir,
+      { kind: "executor", executor, path: remoteContextDir },
+      log,
+    );
+  }
+
+  /**
+   * Run native `docker build` on the remote host against an already-transferred
+   * context dir. One image; `dockerfileName` selects which Dockerfile in the
+   * shared tree to use (so N services can build from one transferred context).
+   */
+  private async buildImageOnRemote(
     config: BuildConfig,
-    buildContext: Awaited<ReturnType<typeof createDockerBuildContext>>,
+    remoteContextDir: string,
+    dockerfileName: string,
     tag: string,
     log: BuildLogger,
   ): Promise<void> {
     const executor = this.connectionOptions?.executor;
     if (!executor) throw new Error("SSH build path requires an executor on connectionOptions");
 
+    // Compose the docker build command. Quoting matters - buildargs and labels
+    // can contain `=` and spaces.
+    const buildArgs = Object.entries({
+      ...config.envVars,
+      NODE_ENV: "production",
+    })
+      .filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+      .map(([k, v]) => `--build-arg ${sq(`${k}=${v}`)}`)
+      .join(" ");
+    const labelArgs = Object.entries(
+      this.labels({ projectId: config.projectId, sessionId: config.sessionId }),
+    )
+      .map(([k, v]) => `--label ${sq(`${k}=${v}`)}`)
+      .join(" ");
+    const dockerfileFlag =
+      dockerfileName && dockerfileName !== "Dockerfile" ? ` -f ${sq(dockerfileName)}` : "";
+
+    // `cd` into the context dir FIRST so docker resolves `-f` and the context
+    // `.` from the same place (BuildKit otherwise resolves `-f` against the SSH
+    // user's home, not the context).
+    const buildCmd =
+      `cd ${sq(remoteContextDir)} && ` +
+      `docker build -t ${sq(tag)}${dockerfileFlag} ` +
+      `${labelArgs} ${buildArgs} --force-rm .`;
+
+    log.log(`Running on remote: ${buildCmd}`);
+    log.log("─── docker build output ───");
+    this.emitDockerStep(log, "install", "running", "Running install inside container (docker build)");
+
+    const { code } = await executor.streamExec(buildCmd, (entry) => {
+      // Pass docker's real output straight through.
+      log.log(entry.message, parseLogLevel(entry.message));
+    });
+
+    log.log("─── end docker build output ───");
+    if (code !== 0) throw new Error(`docker build exited with code ${code}`);
+    this.emitDockerStep(log, "install", "completed", "Image build finished");
+  }
+
+  private async buildViaSshTarPipe(
+    config: BuildConfig,
+    buildContext: Awaited<ReturnType<typeof createDockerBuildContext>>,
+    tag: string,
+    log: BuildLogger,
+  ): Promise<void> {
     const remoteContextDir = `/tmp/openship-build-${config.sessionId}`;
-    log.log(`Streaming build context to ${remoteContextDir}...`);
-
     try {
-      // Wipe stale dir from a previous failed deploy, if any. -rf is
-      // safe - the path is namespaced by sessionId and only ever holds
-      // the context we just transferred.
-      await executor.exec(`rm -rf ${sq(remoteContextDir)} && mkdir -p ${sq(remoteContextDir)}`);
-
-      // Ship the context. transferLocalDirectory's default "auto" mode
-      // tries rsync first (system ssh + native --progress), tar/ssh2
-      // fallback only if rsync is missing.
-      await transferLocalDirectory(
-        buildContext.contextDir,
-        { kind: "executor", executor, path: remoteContextDir },
-        log,
-      );
-
-      // Compose the docker build command. Quoting matters - buildargs
-      // and labels can contain `=` and spaces.
-      const buildArgs = Object.entries({
-        ...config.envVars,
-        NODE_ENV: "production",
-      })
-        .filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
-        .map(([k, v]) => `--build-arg ${sq(`${k}=${v}`)}`)
-        .join(" ");
-      const labelArgs = Object.entries(
-        this.labels({ projectId: config.projectId, sessionId: config.sessionId }),
-      )
-        .map(([k, v]) => `--label ${sq(`${k}=${v}`)}`)
-        .join(" ");
-      const dockerfileFlag =
-        buildContext.dockerfileName && buildContext.dockerfileName !== "Dockerfile"
-          ? ` -f ${sq(buildContext.dockerfileName)}`
-          : "";
-
-      // `cd` into the context dir FIRST so docker resolves `-f` and the
-      // context `.` from the same place. Without this prefix, BuildKit
-      // resolves `-f Dockerfile.openship` against the shell's cwd (the
-      // SSH user's home, typically /root), not the context - and we hit
-      // "no such file or directory: Dockerfile.openship" even though the
-      // file is right there in the context dir on disk.
-      //
-      // Using `cd && docker build .` keeps the context an absolute path
-      // for clarity in the log AND ensures the dockerfile lookup is
-      // relative to the right directory.
-      const buildCmd =
-        `cd ${sq(remoteContextDir)} && ` +
-        `docker build -t ${sq(tag)}${dockerfileFlag} ` +
-        `${labelArgs} ${buildArgs} --force-rm .`;
-
-      log.log(`Running on remote: ${buildCmd}`);
-      log.log("─── docker build output ───");
-
-      this.emitDockerStep(log, "install", "running", "Running install inside container (docker build)");
-
-      const { code } = await executor.streamExec(buildCmd, (entry) => {
-        // Pass docker's real output straight through. No filtering -
-        // the user wants to see what docker says, not our interpretation
-        // of it.
-        log.log(entry.message, parseLogLevel(entry.message));
-      });
-
-      log.log("─── end docker build output ───");
-
-      if (code !== 0) {
-        throw new Error(`docker build exited with code ${code}`);
-      }
-
-      this.emitDockerStep(log, "install", "completed", "Image build finished");
+      await this.transferBuildContext(buildContext.contextDir, remoteContextDir, log);
+      await this.buildImageOnRemote(config, remoteContextDir, buildContext.dockerfileName, tag, log);
     } finally {
-      // Always clean up the remote context - even on failure. Don't
-      // await - if cleanup fails we still want the build result.
-      executor
-        .exec(`rm -rf ${sq(remoteContextDir)}`)
+      // Always clean up the remote context - even on failure. Don't await - if
+      // cleanup fails we still want the build result.
+      this.connectionOptions?.executor
+        ?.exec(`rm -rf ${sq(remoteContextDir)}`)
         .catch(() => { /* best effort */ });
       await buildContext.cleanup();
     }
@@ -673,6 +681,19 @@ export class DockerRuntime implements RuntimeAdapter {
     }
 
     log.log("Connected to Docker daemon. Build output follows:");
+    await this.streamDockerodeBuild(stream, log);
+    log.log("Docker daemon finished streaming build output. Finalizing image...\n");
+  }
+
+  /**
+   * Consume a dockerode build stream: stream progress to the log, enforce the
+   * idle timeout + keepalive, and throw on a fatal build event. Shared by the
+   * single-image dockerode path and the local batch build (buildImages).
+   */
+  private async streamDockerodeBuild(
+    stream: NodeJS.ReadableStream,
+    log: BuildLogger,
+  ): Promise<void> {
     let fatalBuildError: string | null = null;
 
     await new Promise<void>((resolve, reject) => {
@@ -732,8 +753,6 @@ export class DockerRuntime implements RuntimeAdapter {
         },
       );
     });
-
-    log.log("Docker daemon finished streaming build output. Finalizing image...\n");
 
     if (fatalBuildError) {
       throw new Error(fatalBuildError);
@@ -838,6 +857,170 @@ export class DockerRuntime implements RuntimeAdapter {
       const msg = safeErrorMessage(err);
       log.step("build", "failed", `Docker build failed: ${msg}`);
       return { sessionId: config.sessionId, status: "failed", durationMs: Date.now() - startTime, errorMessage: `Docker build failed: ${msg}` };
+    }
+  }
+
+  /**
+   * Batch build: clone + prune the shared source ONCE, then build every image
+   * from that single tree. For SSH the context is transferred ONCE and each
+   * image builds on the remote against it. Eliminates the per-service re-clone
+   * / re-transfer that N separate build() calls incur — every service builds on
+   * the SAME daemon, so the source only needs to arrive once.
+   *
+   * Prepare-phase logs (clone/transfer) go to `prepareLogger`; each image's
+   * build output goes to its own `spec.logger`.
+   */
+  async buildImages(
+    specs: Array<{
+      config: BuildConfig;
+      serviceName: string;
+      logger: BuildLogger;
+      requireRepositoryDockerfile?: boolean;
+      onStart?: () => void;
+      onResult?: (result: BuildResult) => void;
+    }>,
+    prepareLogger: BuildLogger,
+  ): Promise<Array<{ serviceName: string; result: BuildResult }>> {
+    if (specs.length === 0) return [];
+
+    try {
+      await this.ensureDockerFeature(prepareLogger);
+    } catch (featureErr) {
+      throw new Error(this.formatDockerConnectivityError(featureErr));
+    }
+
+    // Every service in a compose/monorepo build shares ONE repo+branch+commit,
+    // so the first spec's source config drives the single clone.
+    const source = specs[0]!.config;
+    const isSsh = this.transport.kind === "ssh" && !!this.connectionOptions?.executor;
+    const remoteContextDir = `/tmp/openship-build-${source.sessionId}`;
+
+    prepareLogger.step("clone", "running", "Preparing shared build context...");
+    const tree = await prepareSourceTree(source, { onLog: prepareLogger.callback });
+
+    try {
+      // Resolve/generate each service's Dockerfile INTO the shared tree, with a
+      // per-service generated name so concurrent builds never clobber each other.
+      const resolvedList = await Promise.all(
+        specs.map(async (spec) => {
+          try {
+            const resolved = await resolveServiceDockerfile(tree.contextDir, spec.config, {
+              requireRepositoryDockerfile:
+                spec.requireRepositoryDockerfile ?? spec.config.stack === "docker",
+              generatedName: `Dockerfile.openship.${spec.config.sessionId}`,
+            });
+            return { spec, resolved, error: null as string | null };
+          } catch (err) {
+            return { spec, resolved: null, error: safeErrorMessage(err) };
+          }
+        }),
+      );
+
+      try {
+        const sizeBytes = await this.estimateContextSize(tree.contextDir);
+        prepareLogger.step(
+          "clone",
+          "completed",
+          `Shared build context ready (${(sizeBytes / 1024 / 1024).toFixed(1)} MB)`,
+        );
+      } catch {
+        prepareLogger.step("clone", "completed", "Shared build context ready");
+      }
+
+      // Transfer the shared context to the remote ONCE — not once per service.
+      if (isSsh) {
+        await this.transferBuildContext(tree.contextDir, remoteContextDir, prepareLogger);
+      }
+
+      // Build each image against the shared tree ONE AT A TIME. Sequential is
+      // deliberate: concurrent `docker build` over SSH contends for SSH channels
+      // (nondeterministic which stream wins) and for server memory (parallel
+      // `bun install`/`next build` OOMs a single box). Sequential also lets each
+      // service's onStart fire in turn, so the UI's auto-follow lands on the ONE
+      // service that's actually streaming. The expensive part (clone + transfer)
+      // is already shared above; only the per-image build is serialized here.
+      const results: Array<{ serviceName: string; result: BuildResult }> = [];
+      for (const { spec, resolved, error } of resolvedList) {
+        const startedAt = Date.now();
+        const tag = this.imageTag(spec.config.slug, spec.config.sessionId);
+
+        if (error || !resolved) {
+          const result: BuildResult = {
+            sessionId: spec.config.sessionId,
+            status: "failed",
+            durationMs: Date.now() - startedAt,
+            errorMessage: error ?? "Failed to resolve Dockerfile",
+          };
+          spec.onResult?.(result);
+          results.push({ serviceName: spec.serviceName, result });
+          continue;
+        }
+
+        // This image's build starts now — flip its status so the UI follows it.
+        spec.onStart?.();
+
+        try {
+          if (isSsh) {
+            await this.buildImageOnRemote(
+              spec.config,
+              remoteContextDir,
+              resolved.dockerfileName,
+              tag,
+              spec.logger,
+            );
+          } else {
+            const stream = await this.docker.buildImage(
+              { context: tree.contextDir, src: resolved.contextEntries },
+              {
+                t: tag,
+                dockerfile: resolved.dockerfileName,
+                labels: this.labels({
+                  projectId: spec.config.projectId,
+                  sessionId: spec.config.sessionId,
+                }),
+                buildargs: { ...spec.config.envVars, NODE_ENV: "production" },
+                forcerm: true,
+              },
+            );
+            await this.streamDockerodeBuild(stream, spec.logger);
+          }
+
+          try {
+            await this.docker.getImage(tag).inspect();
+          } catch {
+            throw new Error(`Docker build finished but the image ${tag} was not created`);
+          }
+
+          spec.logger.log(`Image ${tag} is ready.\n`);
+          const result: BuildResult = {
+            sessionId: spec.config.sessionId,
+            status: "deploying",
+            imageRef: tag,
+            durationMs: Date.now() - startedAt,
+          };
+          spec.onResult?.(result);
+          results.push({ serviceName: spec.serviceName, result });
+        } catch (err) {
+          const msg = safeErrorMessage(err);
+          spec.logger.log(`Docker build failed: ${msg}\n`, "error");
+          const result: BuildResult = {
+            sessionId: spec.config.sessionId,
+            status: "failed",
+            durationMs: Date.now() - startedAt,
+            errorMessage: `Docker build failed: ${msg}`,
+          };
+          spec.onResult?.(result);
+          results.push({ serviceName: spec.serviceName, result });
+        }
+      }
+      return results;
+    } finally {
+      if (isSsh) {
+        this.connectionOptions?.executor
+          ?.exec(`rm -rf ${sq(remoteContextDir)}`)
+          .catch(() => { /* best effort */ });
+      }
+      await tree.cleanup();
     }
   }
 

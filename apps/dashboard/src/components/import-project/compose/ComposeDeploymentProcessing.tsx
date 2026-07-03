@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, SlidersHorizontal } from "lucide-react";
 
 import ComposeSidebar from "./ComposeSidebar";
 import BuildTerminal from "../BuildTerminal";
@@ -17,6 +17,11 @@ import type { BuildLog } from "@/utils/deploymentPhaseDetector";
 
 const warningDismissedKey = (deploymentId: string) => `compose-warning-dismissed:${deploymentId}`;
 const ANSI_ESCAPE_PATTERN = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+
+// The shared clone/context-prep stream (one clone for the whole deployment, not
+// one per service) has no serviceName, so it gets its own tab instead of being
+// dropped or duplicated across per-service tabs.
+const PREPARE_TAB = "__prepare__";
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
@@ -35,6 +40,12 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
   const warningModalRef = React.useRef<string | null>(null);
   const handledWarningDeploymentRef = React.useRef<string | null>(null);
   const [activeLogTab, setActiveLogTab] = useState("");
+  // Once the user picks a tab, stop auto-following the active phase.
+  const [userPinnedTab, setUserPinnedTab] = useState(false);
+  const handleTabChange = (tab: string) => {
+    setUserPinnedTab(true);
+    setActiveLogTab(tab);
+  };
 
   const hasWarning = deploymentStatus === "ready" && !!state.warningMessage;
   const isFinished =
@@ -80,25 +91,24 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
     onTerminalReady();
   }, [onTerminalReady]);
 
+  // Auto-follow the active phase: the shared "Prepare" (clone/transfer) stream
+  // first, then whichever service is currently building/deploying — advancing
+  // to the next one as each settles. Stops the moment the user picks a tab.
   useEffect(() => {
-    if (logServiceNames.length === 0) {
-      if (activeLogTab) {
-        setActiveLogTab("");
-      }
-      return;
+    if (userPinnedTab) return;
+    const statusByName = new Map(services.map((s) => [s.serviceName, s.status]));
+    const working = logServiceNames.find((name) => {
+      const status = statusByName.get(name);
+      return status === "building" || status === "deploying";
+    });
+    // Follow the actively-building/deploying service. When nothing is working:
+    // on first mount (no tab chosen yet) land on Prepare; otherwise stay put —
+    // don't bounce back to Prepare in the gap between the build and deploy phases.
+    const target = working ?? (activeLogTab ? null : PREPARE_TAB);
+    if (target && target !== activeLogTab) {
+      setActiveLogTab(target);
     }
-
-    if (!activeLogTab || !logServiceNames.includes(activeLogTab)) {
-      // Prefer a service that's actively working so the opened tab shows live
-      // logs; otherwise fall back to the first tab (buildable-first ordering).
-      const statusByName = new Map(services.map((s) => [s.serviceName, s.status]));
-      const workingService = logServiceNames.find((name) => {
-        const status = statusByName.get(name);
-        return status === "building" || status === "deploying";
-      });
-      setActiveLogTab(workingService ?? logServiceNames[0] ?? "");
-    }
-  }, [activeLogTab, logServiceNames, services]);
+  }, [userPinnedTab, services, logServiceNames, activeLogTab]);
 
   // ── Pipeline prompt modal ──────────────────────────────────────────────
   useEffect(() => {
@@ -231,6 +241,12 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
     if (state.projectId) router.push(`/projects/${state.projectId}`);
   };
 
+  // Jump to the project's Services tab — where compose/service config is edited
+  // (image, ports, env, volumes, healthcheck, …) before a redeploy.
+  const handleEditConfig = () => {
+    if (state.projectId) router.push(`/projects/${state.projectId}/services`);
+  };
+
   // ── Title ──────────────────────────────────────────────────────────────
   const title =
     deploymentStatus === "cancelled"
@@ -303,7 +319,7 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
             serviceNames={logServiceNames}
             services={services}
             activeTab={activeLogTab}
-            onTabChange={setActiveLogTab}
+            onTabChange={handleTabChange}
             deploymentStatus={deploymentStatus}
             running={running}
             building={building}
@@ -319,8 +335,8 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
         <div className="lg:sticky lg:top-6 h-fit space-y-6">
           <ComposeSidebar />
 
-          {/* Action button */}
-          <div className="bg-card rounded-2xl border border-border/50 p-4">
+          {/* Action buttons */}
+          <div className="bg-card rounded-2xl border border-border/50 p-4 space-y-2">
             {deploymentStatus === "deploying" || deploymentStatus === "building" ? (
               <button
                 onClick={stopDeployment}
@@ -340,21 +356,35 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
                   "Stop Deployment"
                 )}
               </button>
-            ) : deploymentStatus === "failed" || deploymentStatus === "cancelled" ? (
-              <button
-                onClick={onRedeploy}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-xl font-medium text-sm hover:bg-primary/90 transition-all"
-              >
-                Redeploy
-              </button>
-            ) : deploymentStatus === "ready" ? (
-              <button
-                onClick={handleViewDashboard}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-xl font-medium text-sm hover:bg-primary/90 transition-all"
-              >
-                Open Dashboard
-              </button>
-            ) : null}
+            ) : (
+              <>
+                {(deploymentStatus === "failed" || deploymentStatus === "cancelled") && (
+                  <button
+                    onClick={onRedeploy}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-xl font-medium text-sm hover:bg-primary/90 transition-all"
+                  >
+                    Redeploy
+                  </button>
+                )}
+                {deploymentStatus === "ready" && (
+                  <button
+                    onClick={handleViewDashboard}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-xl font-medium text-sm hover:bg-primary/90 transition-all"
+                  >
+                    Open Dashboard
+                  </button>
+                )}
+                {state.projectId && (
+                  <button
+                    onClick={handleEditConfig}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm border border-border/60 bg-muted/40 text-foreground hover:bg-muted/70 transition-all"
+                  >
+                    <SlidersHorizontal className="h-4 w-4" />
+                    Edit Configuration
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -467,30 +497,13 @@ function statusDotClass(status?: ServiceDeployStatus["status"]) {
   }
 }
 
-function serviceTabClass(status: ServiceDeployStatus["status"] | undefined, isActive: boolean) {
-  if (status === "failed") {
-    return isActive
-      ? "border-destructive/30 bg-destructive/10 text-destructive"
-      : "border-destructive/20 bg-destructive/5 text-destructive hover:bg-destructive/10";
-  }
-  if (status === "running") {
-    return isActive
-      ? "border-primary/30 bg-primary/10 text-primary"
-      : "border-primary/20 bg-primary/5 text-primary hover:bg-primary/10";
-  }
-  if (status === "building" || status === "deploying") {
-    return isActive
-      ? "border-foreground/25 bg-foreground/10 text-foreground"
-      : "border-border/60 bg-muted/30 text-foreground hover:bg-muted/50";
-  }
-  if (status === "built") {
-    return isActive
-      ? "border-muted-foreground/30 bg-muted text-foreground"
-      : "border-border/60 bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-muted/50";
-  }
+// Borderless, neutral tabs. Status is conveyed by the leading dot/spinner only —
+// tinting the whole pill by status turned every tab solid red on a failed deploy
+// and clashed with the app's theme. The active tab reads via a subtle raised fill.
+function serviceTabClass(isActive: boolean) {
   return isActive
-    ? "border-primary/30 bg-primary/10 text-primary"
-    : "border-border/60 bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-muted/50";
+    ? "bg-foreground/10 text-foreground"
+    : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground";
 }
 
 function ComposeServiceLogsPanel({
@@ -536,14 +549,18 @@ function ComposeServiceLogsPanel({
     const byService = new Map<string, ParsedLogLine[]>();
     serviceNames.forEach((serviceName) => byService.set(serviceName, []));
 
+    // Logs with no serviceName are the shared prepare stream (one clone +
+    // context transfer for the whole deployment) — collect them into Prepare.
+    const prepareLogs: ParsedLogLine[] = [];
     parsedLogs.forEach((log) => {
       if (!log.serviceName) {
+        prepareLogs.push(log);
         return;
       }
       byService.get(log.serviceName)?.push(log);
     });
 
-    return serviceNames.map((serviceName) => ({
+    const serviceTabs = serviceNames.map((serviceName) => ({
       id: serviceName,
       label: serviceName,
       logs: byService.get(serviceName) ?? [],
@@ -551,6 +568,18 @@ function ComposeServiceLogsPanel({
         ? `No logs were recorded for ${serviceName}.`
         : `Waiting for ${serviceName} logs...`,
     }));
+
+    return [
+      {
+        id: PREPARE_TAB,
+        label: "Prepare",
+        logs: prepareLogs,
+        emptyMessage: hasFinished
+          ? "No preparation logs were recorded."
+          : "Cloning source and preparing the build context...",
+      },
+      ...serviceTabs,
+    ];
   }, [hasFinished, parsedLogs, serviceNames]);
 
   return (
@@ -585,32 +614,32 @@ function ComposeServiceLogsPanel({
         )}
 
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          {serviceNames.length > 0 ? (
-            serviceNames.map((serviceName) => {
-              const status = serviceStatusByName.get(serviceName);
-              const isActive = activeTab === serviceName;
-              return (
-                <button
-                  key={serviceName}
-                  type="button"
-                  onClick={() => onTabChange(serviceName)}
-                  className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${serviceTabClass(status, isActive)}`}
-                >
-                  {status === "building" || status === "deploying" ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
+          {terminalTabs.map((tab) => {
+            const isActive = activeTab === tab.id;
+            const isPrepare = tab.id === PREPARE_TAB;
+            const status = isPrepare ? undefined : serviceStatusByName.get(tab.id);
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => onTabChange(tab.id)}
+                className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${serviceTabClass(isActive)}`}
+              >
+                {isPrepare ? (
+                  isFinished ? (
+                    <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
                   ) : (
-                    <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass(status)}`} />
-                  )}
-                  {serviceName}
-                </button>
-              );
-            })
-          ) : (
-            <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-muted/30 px-3 py-1.5 text-xs font-medium text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Preparing services
-            </span>
-          )}
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  )
+                ) : status === "building" || status === "deploying" ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass(status)}`} />
+                )}
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
         <div className="relative h-[420px] overflow-hidden rounded-xl border border-border/50 bg-white dark:bg-black">

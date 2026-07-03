@@ -538,7 +538,7 @@ const ServiceConfigSection: React.FC<{
 
   const inputCls =
     "w-full rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/20";
-  const labelCls = "text-[11px] font-medium uppercase tracking-wide text-muted-foreground";
+  const labelCls = "text-xs font-semibold uppercase tracking-wider text-foreground/80";
 
   return (
     <div className="mt-3 rounded-xl border border-border/40 bg-muted/10">
@@ -564,7 +564,7 @@ const ServiceConfigSection: React.FC<{
           {/* Ports */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <Network className="size-3.5 text-muted-foreground" />
+              <Network className="size-4 text-foreground/70" />
               <span className={labelCls}>Ports</span>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -626,7 +626,7 @@ const ServiceConfigSection: React.FC<{
           {/* Volumes */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <HardDrive className="size-3.5 text-muted-foreground" />
+              <HardDrive className="size-4 text-foreground/70" />
               <span className={labelCls}>Volumes</span>
             </div>
             {statefulOnCloud && (

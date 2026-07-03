@@ -255,13 +255,36 @@ export interface DockerBuildContext {
   cleanup(): Promise<void>;
 }
 
-export async function createDockerBuildContext(
+/**
+ * A cloned + pruned source tree on the orchestrator, ready to build one OR
+ * MORE images from. Separated from Dockerfile resolution so a compose/monorepo
+ * stack can clone the repo ONCE and build every service against this single
+ * tree instead of re-cloning per service.
+ */
+export interface SourceTree {
+  contextDir: string;
+  cleanup(): Promise<void>;
+}
+
+/** Per-image Dockerfile resolution result within an already-prepared tree. */
+export interface ResolvedDockerfile {
+  contextEntries: string[];
+  dockerfileName: string;
+  rootDirectory: string;
+  usesRepositoryDockerfile: boolean;
+}
+
+/**
+ * Clone (git) or copy (local) the source into a fresh temp dir and prune it to
+ * the Docker build context — ONCE. No Dockerfile resolution happens here: that
+ * is per-image (see resolveServiceDockerfile) so N services share this tree.
+ */
+export async function prepareSourceTree(
   config: BuildConfig,
-  opts?: { requireRepositoryDockerfile?: boolean; onLog?: LogCallback },
-): Promise<DockerBuildContext> {
+  opts?: { onLog?: LogCallback },
+): Promise<SourceTree> {
   const contextDir = await mkdtemp(join(tmpdir(), "openship-docker-context-"));
   const excludes = getDockerContextExcludes(config);
-  const requireRepositoryDockerfile = opts?.requireRepositoryDockerfile ?? false;
 
   try {
     if (config.localPath) {
@@ -275,51 +298,97 @@ export async function createDockerBuildContext(
       await pruneContextDirectory(contextDir, contextDir, excludes, dockerignoreMatcher);
     }
 
-    const resolvedRootDirectory = await resolveDockerRootDirectory(
-      contextDir,
-      config.rootDirectory,
-      config.localPath,
-    );
-
-    const repositoryDockerfileName = await resolveDockerfileName(
-      contextDir,
-      resolvedRootDirectory,
-      config.dockerfilePath,
-    );
-    const hasRepositoryDockerfile = repositoryDockerfileName !== null;
-
-    if (!hasRepositoryDockerfile && requireRepositoryDockerfile) {
-      const expectedDockerfile = config.dockerfilePath?.trim() || "Dockerfile";
-      throw new Error(
-        `No Dockerfile found for this build context. Expected ${expectedDockerfile}${config.rootDirectory ? ` under ${config.rootDirectory}` : ""}.`,
-      );
-    }
-
-    if (!hasRepositoryDockerfile) {
-      await writeFile(
-        join(contextDir, GENERATED_DOCKERFILE_NAME),
-        generateDockerfile({
-          ...config,
-          rootDirectory: resolvedRootDirectory,
-        }),
-        "utf-8",
-      );
-    }
-
-    const contextEntries = await readdir(contextDir);
-
     return {
       contextDir,
-      contextEntries,
-      dockerfileName: repositoryDockerfileName ?? GENERATED_DOCKERFILE_NAME,
-      rootDirectory: resolvedRootDirectory,
-      usesRepositoryDockerfile: hasRepositoryDockerfile,
       cleanup: async () => {
         await rm(contextDir, { recursive: true, force: true }).catch(() => {});
       },
     };
   } catch (error) {
     await rm(contextDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Resolve (or generate) the Dockerfile for ONE image inside an
+ * already-prepared tree. `generatedName` lets concurrent per-service builds
+ * each write their own generated Dockerfile into the shared tree without
+ * clobbering one another; it defaults to the single-image name.
+ */
+export async function resolveServiceDockerfile(
+  contextDir: string,
+  config: BuildConfig,
+  opts?: { requireRepositoryDockerfile?: boolean; generatedName?: string },
+): Promise<ResolvedDockerfile> {
+  const requireRepositoryDockerfile = opts?.requireRepositoryDockerfile ?? false;
+  const generatedName = opts?.generatedName ?? GENERATED_DOCKERFILE_NAME;
+
+  const resolvedRootDirectory = await resolveDockerRootDirectory(
+    contextDir,
+    config.rootDirectory,
+    config.localPath,
+  );
+
+  const repositoryDockerfileName = await resolveDockerfileName(
+    contextDir,
+    resolvedRootDirectory,
+    config.dockerfilePath,
+  );
+  const hasRepositoryDockerfile = repositoryDockerfileName !== null;
+
+  if (!hasRepositoryDockerfile && requireRepositoryDockerfile) {
+    const expectedDockerfile = config.dockerfilePath?.trim() || "Dockerfile";
+    throw new Error(
+      `No Dockerfile found for this build context. Expected ${expectedDockerfile}${config.rootDirectory ? ` under ${config.rootDirectory}` : ""}.`,
+    );
+  }
+
+  if (!hasRepositoryDockerfile) {
+    await writeFile(
+      join(contextDir, generatedName),
+      generateDockerfile({
+        ...config,
+        rootDirectory: resolvedRootDirectory,
+      }),
+      "utf-8",
+    );
+  }
+
+  const contextEntries = await readdir(contextDir);
+
+  return {
+    contextEntries,
+    dockerfileName: repositoryDockerfileName ?? generatedName,
+    rootDirectory: resolvedRootDirectory,
+    usesRepositoryDockerfile: hasRepositoryDockerfile,
+  };
+}
+
+/**
+ * Single-image build context = prepare the tree + resolve one Dockerfile.
+ * Kept as the composition of the two primitives above so the single-app path
+ * is unchanged while compose/monorepo builds reuse `prepareSourceTree` once.
+ */
+export async function createDockerBuildContext(
+  config: BuildConfig,
+  opts?: { requireRepositoryDockerfile?: boolean; onLog?: LogCallback },
+): Promise<DockerBuildContext> {
+  const tree = await prepareSourceTree(config, { onLog: opts?.onLog });
+  try {
+    const resolved = await resolveServiceDockerfile(tree.contextDir, config, {
+      requireRepositoryDockerfile: opts?.requireRepositoryDockerfile,
+    });
+    return {
+      contextDir: tree.contextDir,
+      contextEntries: resolved.contextEntries,
+      dockerfileName: resolved.dockerfileName,
+      rootDirectory: resolved.rootDirectory,
+      usesRepositoryDockerfile: resolved.usesRepositoryDockerfile,
+      cleanup: tree.cleanup,
+    };
+  } catch (error) {
+    await tree.cleanup();
     throw error;
   }
 }

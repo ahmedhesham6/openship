@@ -339,6 +339,31 @@ export interface MultiServiceRuntimeAdapter extends RuntimeAdapter {
     config: MultiServiceDeployConfig,
     onLog?: LogCallback,
   ): Promise<MultiServiceDeployResult>;
+
+  /**
+   * Optional batch build: clone/prune the shared source ONCE and build every
+   * image from it (transferring once for SSH). Implemented by runtimes where all
+   * services build on the same daemon/host (Docker), so the repo isn't re-cloned
+   * per service. Absent on runtimes where each service is a separate instance
+   * (Cloud) — those keep building per-service via `build()`. Prepare-phase logs
+   * (clone/transfer) go to `prepareLogger`; each image's output to `spec.logger`.
+   */
+  buildImages?(
+    specs: Array<{
+      config: BuildConfig;
+      serviceName: string;
+      logger: BuildLogger;
+      requireRepositoryDockerfile?: boolean;
+      /** Called when THIS image's build begins (after the shared clone/
+       *  transfer) so callers can flip the service to "building" only then. */
+      onStart?: () => void;
+      /** Called with THIS image's result the moment its build settles, so
+       *  callers can record/broadcast per service as each finishes (builds run
+       *  sequentially) rather than waiting for the whole batch. */
+      onResult?: (result: BuildResult) => void;
+    }>,
+    prepareLogger: BuildLogger,
+  ): Promise<Array<{ serviceName: string; result: BuildResult }>>;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

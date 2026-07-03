@@ -8,6 +8,17 @@ import { AuthProvider } from "@/context/AuthContext";
 import { NetworkErrorHandler } from "@/components/network-error-handler";
 import { ModalProvider } from "@/context/ModalContext";
 
+/**
+ * Render every route on-demand, never at build time. The dashboard resolves its
+ * deploy/auth mode from the API (`GET /health/env`) and reads request `headers()`
+ * on render — neither is available during `next build` (the API isn't running in
+ * the Docker builder), and the deploy-info resolver correctly refuses to guess.
+ * Forcing dynamic here skips static prerendering app-wide so the image builds
+ * without a live API; nothing in this auth-gated dashboard is statically cacheable
+ * anyway. Do NOT remove — it's what lets the container build succeed.
+ */
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Openship",
   description: "Manage your deployments, domains, and infrastructure.",

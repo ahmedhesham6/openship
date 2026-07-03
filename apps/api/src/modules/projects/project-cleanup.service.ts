@@ -204,6 +204,19 @@ export async function collectProjectManifest(
         await pushVolumesForContainer(sd.containerId, runtime, "service");
         pushContainer(sd.containerId, runtime, "service container");
       }
+      // Per-service compose/monorepo images (openship/<slug>-<svc>:bld_…-svc_…).
+      // These are the REAL images for a multi-service deployment — dep.imageRef
+      // is only the "compose" sentinel — so without this they leak on project
+      // deletion. Deduped via the shared seenImages set. Docker only.
+      if (sd.imageRef && !seenImages.has(sd.imageRef) && runtime instanceof DockerRuntime) {
+        seenImages.add(sd.imageRef);
+        resources.push({
+          type: "image",
+          ref: sd.imageRef,
+          label: `service image ${sd.imageRef.slice(0, 24)}`,
+          runtime,
+        });
+      }
     }
 
     // Main deployment container - same order.
