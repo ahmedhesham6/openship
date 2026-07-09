@@ -18,6 +18,10 @@ import { repos } from "@repo/db";
 import { cloudRuntimeTarget, cloudRuntimeTargetId } from "../../config/env";
 import { decrypt } from "../encryption";
 
+/** Max wait for the SaaS to send response headers before we give up (503).
+ *  Bounds every proxied call; body streaming continues past this once headers land. */
+const CLOUD_FETCH_HEADER_TIMEOUT_MS = 60_000;
+
 /**
  * Make an authenticated request to the SaaS as `userId`: read the stored
  * session → decrypt → Bearer auth. Returns the Response, or null when the user
@@ -42,6 +46,11 @@ export async function cloudFetch(
   const targetUrl = `${cloudRuntimeTarget.api}${path}`;
   const method = (init?.method ?? "GET").toUpperCase();
   console.log(`[cloud-client] → ${method} ${targetUrl}  (cloudRuntimeTargetId=${cloudRuntimeTargetId})`);
+  // Deadline on getting response HEADERS, cleared the moment fetch() resolves —
+  // so a dead/stalled SaaS can't hang the request forever, but streamed bodies
+  // (SSE logs/build) are untouched (headers arrive fast, then the timer is off).
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CLOUD_FETCH_HEADER_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(targetUrl, {
@@ -51,10 +60,13 @@ export async function cloudFetch(
         ...init?.headers,
         Authorization: `Bearer ${sessionToken}`,
       },
+      signal: controller.signal,
     });
   } catch (err) {
     console.warn(`[cloud-client] fetch failed ${targetUrl}: ${(err as Error).message}`);
     return null;
+  } finally {
+    clearTimeout(timer);
   }
   console.log(`[cloud-client] ← ${method} ${targetUrl} ${res.status}`);
 

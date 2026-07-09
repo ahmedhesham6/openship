@@ -3,7 +3,7 @@
 import React from "react";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { DeploymentsContent } from "@/app/(dashboard)/deployments/components";
-import { deployApi, projectsApi } from "@/lib/api";
+import { deployApi, projectsApi, isAbortError } from "@/lib/api";
 import { type Service } from "@/lib/api/services";
 import { useModal } from "@/context/ModalContext";
 import { useToast } from "@/context/ToastContext";
@@ -81,6 +81,14 @@ export const Deployments = () => {
       const newId = res?.data?.deployment?.id;
       router.push(newId ? `/build/${newId}` : `/projects/${projectData.id}/deployments`);
     } catch (error) {
+      // A timeout almost certainly means the server started the deploy but was
+      // slow to return the id — show the deployments list so it's visible rather
+      // than stranding the user on an error.
+      if (isAbortError(error)) {
+        showToast("Deploy started — taking longer than usual, opening deployments.", "success", "Deploying");
+        router.push(`/projects/${projectData.id}/deployments`);
+        return;
+      }
       console.error("Redeploy failed:", error);
       showToast(
         mode === "refresh"

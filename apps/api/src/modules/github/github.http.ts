@@ -48,13 +48,27 @@ function withQuery(url: string, method: string, params?: Record<string, unknown>
   return qs ? `${url}?${qs}` : url;
 }
 
+/** github.com REST should never hang — bound every call so a stalled request
+ *  can't block a caller (e.g. the pre-deploy branch resolve) indefinitely. */
+const GH_FETCH_TIMEOUT_MS = 20_000;
+
+async function timedFetch(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GH_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Throwing variant. 204 → `{ success: true }`; non-2xx → throws with
  * GitHub's own error message. This is the contract `githubFetch` relies on.
  */
 export async function ghFetch<T = unknown>(token: string, req: GhRequest): Promise<T> {
   const method = req.method ?? "GET";
-  const res = await fetch(withQuery(req.url, method, req.params), {
+  const res = await timedFetch(withQuery(req.url, method, req.params), {
     method,
     headers: ghHeaders(token, req.headers),
     body: method !== "GET" ? JSON.stringify(req.params ?? {}) : undefined,
@@ -79,7 +93,7 @@ export async function ghFetch<T = unknown>(token: string, req: GhRequest): Promi
 export async function ghFetchSoft<T = unknown>(token: string, req: GhRequest): Promise<T | null> {
   try {
     const method = req.method ?? "GET";
-    const res = await fetch(withQuery(req.url, method, req.params), {
+    const res = await timedFetch(withQuery(req.url, method, req.params), {
       method,
       headers: ghHeaders(token, req.headers),
     });

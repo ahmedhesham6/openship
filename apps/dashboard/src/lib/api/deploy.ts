@@ -171,7 +171,11 @@ export const deployApi = {
      *  pull, no rebuild. Recreates env-changed services from their existing
      *  images. */
     refresh?: boolean;
-  }) => api.post<any>("deployments", body),
+  }) =>
+    // Longer timeout than the 15s default: the trigger does synchronous git/DNS
+    // pre-work (and proxies to the SaaS for cloud projects) before returning the
+    // new deployment id, and losing that id means losing the redirect.
+    api.post<any>("deployments", body, { timeout: 60_000 }),
 
   /** Resolve project info from GitHub repo or local path - detects stack */
   prepare: (body: PrepareProjectSource) =>
