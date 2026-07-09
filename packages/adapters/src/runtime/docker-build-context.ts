@@ -14,13 +14,15 @@ import { generateDockerfile } from "./docker-build-plan";
 import { resolveDockerfileCandidates, resolveDockerRootDirectory } from "./docker-paths";
 
 /**
- * Per-clone timeout. Five minutes is generous for a depth-1 clone over
- * normal connectivity and still bounds a hung clone (DNS hang, dead
- * proxy, network partition) so the build fails with a clear error
- * instead of pinning a build slot until the outer build timeout.
+ * IDLE (no-progress) timeout, not a global wall-clock cap: the timer resets on
+ * every chunk of git output. A slow-but-progressing clone (large repo, slow
+ * link) is never killed — only a genuinely stalled one (DNS hang, dead proxy,
+ * network partition → no bytes for the whole window) fails with a clear error
+ * instead of pinning a build slot. Git `--progress` streams continuously, so
+ * "no output for 5 min" reliably means stalled.
  */
-const GIT_CLONE_TIMEOUT_MS = 5 * 60_000;
-const GIT_CHECKOUT_TIMEOUT_MS = 60_000;
+const GIT_CLONE_IDLE_TIMEOUT_MS = 5 * 60_000;
+const GIT_CHECKOUT_IDLE_TIMEOUT_MS = 60_000;
 
 /**
  * Run a git subcommand with stderr streamed into the build log and a
@@ -60,10 +62,30 @@ function spawnGit(
       }
     };
 
+    // Idle timeout, not a global cap: (re)armed on every chunk of git output so
+    // a slow-but-progressing clone survives, and only a stalled one (no bytes
+    // for the whole window) is killed. Git `--progress` streams continuously.
+    let idleTimer: ReturnType<typeof setTimeout>;
+    const armIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(
+          new Error(
+            `git ${args.find((a) => !a.startsWith("-")) ?? "command"} stalled — no progress for ${Math.round(
+              opts.timeoutMs / 1000,
+            )}s`,
+          ),
+        );
+      }, opts.timeoutMs);
+    };
+
     child.stdout?.on("data", (buf: Buffer) => {
+      armIdle();
       for (const ln of buf.toString().split(/\r?\n/)) flushLine(ln);
     });
     child.stderr?.on("data", (buf: Buffer) => {
+      armIdle();
       const text = buf.toString();
       stderr += text;
       // Git emits progress on stderr — stream it the same way as stdout
@@ -71,23 +93,14 @@ function spawnGit(
       for (const ln of text.split(/\r?\n/)) flushLine(ln);
     });
 
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(
-        new Error(
-          `git ${args.find((a) => !a.startsWith("-")) ?? "command"} timed out after ${Math.round(
-            opts.timeoutMs / 1000,
-          )}s`,
-        ),
-      );
-    }, opts.timeoutMs);
+    armIdle(); // start the clock; every stdout/stderr chunk resets it
 
     child.on("error", (err) => {
-      clearTimeout(timeout);
+      clearTimeout(idleTimer);
       reject(err);
     });
     child.on("close", (code) => {
-      clearTimeout(timeout);
+      clearTimeout(idleTimer);
       if (code === 0) resolve();
       else reject(new Error(`git exited with code ${code}: ${stderr.trim().slice(-500) || "no stderr"}`));
     });
@@ -226,7 +239,7 @@ async function cloneGitSource(
       cloneUrl,
       targetPath,
     ],
-    { timeoutMs: GIT_CLONE_TIMEOUT_MS, onLog },
+    { timeoutMs: GIT_CLONE_IDLE_TIMEOUT_MS, onLog },
   );
 
   if (config.commitSha) {
@@ -239,7 +252,7 @@ async function cloneGitSource(
         "checkout",
         config.commitSha,
       ],
-      { timeoutMs: GIT_CHECKOUT_TIMEOUT_MS, onLog },
+      { timeoutMs: GIT_CHECKOUT_IDLE_TIMEOUT_MS, onLog },
     );
   }
 

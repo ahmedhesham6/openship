@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -37,6 +38,9 @@ export function Modal({
   overflow = 'auto'
 }: ModalProps) {
   const [isVisible, setIsVisible] = useState(false);
+  // Portal target only exists after mount (SSR has no document).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (isOpen) {
@@ -52,7 +56,7 @@ export function Modal({
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (closable && e.target === e.currentTarget) {
@@ -66,7 +70,7 @@ export function Modal({
     }
   };
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 flex items-center justify-center p-4"
       style={{ zIndex }}
@@ -79,9 +83,12 @@ export function Modal({
         onClick={handleBackdropDivClick}
       />
 
-      {/* Modal Container */}
+      {/* Modal Container. Uses the opaque overlay surface (`bg-popover`), NOT
+          `bg-card` — in dark mode card is a ~2.5%-opacity inline tint, so a
+          floating modal on it lets the page bleed through. Border adds definition
+          against the backdrop. */}
       <div
-        className="relative w-full bg-card rounded-2xl shadow-2xl flex flex-col transition-all duration-300 !overflow-x-hidden"
+        className="relative w-full bg-popover border border-border/60 rounded-2xl shadow-2xl flex flex-col transition-all duration-300 !overflow-x-hidden"
         style={{
           width,
           overflow,
@@ -110,7 +117,8 @@ export function Modal({
         </div>
         {footer}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

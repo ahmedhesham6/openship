@@ -476,8 +476,22 @@ export const useBuildStream = (options: UseBuildStreamOptions = {}): UseBuildStr
       return;
     }
 
-    // Prevent duplicate concurrent connections (double-click, remount race)
-    if (connectingRef.current) return;
+    // Switching to a DIFFERENT deployment (redeploy/retry navigation via
+    // router.push): tear the old stream down first so the new one takes over
+    // cleanly. Without this the stale/terminal connection blocks the new logs
+    // until a full page reload. Force-clears the in-flight guard so a mid-flight
+    // connect to the OLD id can't suppress the switch.
+    const previousId = activeDeploymentIdRef.current;
+    if (previousId !== null && previousId !== deploymentId) {
+      clearReconnectTimer();
+      sseStream.disconnect();
+      connectingRef.current = false;
+      isConnectedRef.current = false;
+      isReconnectingRef.current = false;
+    } else if (connectingRef.current) {
+      // Duplicate concurrent connect to the SAME deployment (double-click / remount race).
+      return;
+    }
 
     clearReconnectTimer();
     manualDisconnectRef.current = false;
@@ -490,7 +504,7 @@ export const useBuildStream = (options: UseBuildStreamOptions = {}): UseBuildStr
     setIsReconnecting(false);
 
     await openStream(deploymentId, startBuild);
-  }, [clearReconnectTimer, openStream]);
+  }, [clearReconnectTimer, openStream, sseStream]);
 
   /**
    * Disconnect from stream

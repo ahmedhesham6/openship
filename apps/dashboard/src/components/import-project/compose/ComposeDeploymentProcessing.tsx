@@ -49,6 +49,9 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
     setUserPinnedTab(true);
     setActiveLogTab(tab);
   };
+  // Last actively-building/deploying service — auto-follow releases a stale
+  // manual pin when this advances to a new service.
+  const prevWorkingRef = useRef<string | undefined>(undefined);
 
   const hasWarning = deploymentStatus === "ready" && !!state.warningMessage;
   // A partial-failure deploy held for an explicit keep/reject decision. Driven
@@ -102,12 +105,26 @@ const ComposeDeploymentProcessing: React.FC<Props> = ({ onRedeploy }) => {
   // first, then whichever service is currently building/deploying — advancing
   // to the next one as each settles. Stops the moment the user picks a tab.
   useEffect(() => {
-    if (userPinnedTab) return;
     const statusByName = new Map(services.map((s) => [s.serviceName, s.status]));
     const working = logServiceNames.find((name) => {
       const status = statusByName.get(name);
       return status === "building" || status === "deploying";
     });
+
+    // When the build advances to a NEW actively-building/deploying service,
+    // release a stale manual pin so auto-follow re-engages on the live service.
+    // Without this the first tab click freezes the view forever (the pin was
+    // never reset), stranding the user on an empty/not-yet-built tab.
+    if (working && working !== prevWorkingRef.current) {
+      prevWorkingRef.current = working;
+      if (userPinnedTab) {
+        setUserPinnedTab(false);
+        return; // re-runs with the pin cleared, then follows below
+      }
+    }
+
+    if (userPinnedTab) return;
+
     // Follow the actively-building/deploying service. When nothing is working:
     // on first mount (no tab chosen yet) land on Prepare; otherwise stay put —
     // don't bounce back to Prepare in the gap between the build and deploy phases.
