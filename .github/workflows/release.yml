@@ -284,6 +284,11 @@ jobs:
   publish-npm:
     name: Publish CLI to npm
     runs-on: ubuntu-24.04
+    # OIDC trusted publishing: npm verifies this workflow's identity instead of
+    # a long-lived token. id-token:write lets the runner mint the OIDC token.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -305,6 +310,9 @@ jobs:
           node-version: '24'
           registry-url: https://registry.npmjs.org
 
+      - name: Ensure npm supports trusted publishing (OIDC)
+        run: npm install -g npm@latest
+
       - name: Restore bun cache
         uses: actions/cache@v6
         with:
@@ -319,10 +327,8 @@ jobs:
       - name: Build CLI
         run: bun run --cwd apps/cli build
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC trusted publishing — no token)
         working-directory: apps/cli
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
