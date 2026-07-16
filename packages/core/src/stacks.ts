@@ -86,7 +86,10 @@ export const LANGUAGES = {
   },
   java: {
     name: "Java",
-    buildImage: "eclipse-temurin:21-jdk-alpine",
+    // Maven image bundles both `mvn` and JDK 21, so the generated Dockerfile
+    // builds Maven projects out of the box; Gradle/Kotlin projects build via
+    // their `./gradlew` wrapper (needs only the JDK, which this image has).
+    buildImage: "maven:3.9-eclipse-temurin-21",
     runtimeImage: "eclipse-temurin:21-jre-alpine",
     packageManagers: ["maven", "gradle"],
     requiredTools: ["java", "javac"],
@@ -668,15 +671,19 @@ export const STACKS = {
 
   // ── PHP ────────────────────────────────────────────────────────────────────
 
+  // PHP stacks run php-fpm behind nginx (docroot public/). The generated
+  // Dockerfile (docker-build-plan.ts PHP branch) installs nginx + writes the
+  // config template; this start command renders it for the injected $PORT and
+  // launches both processes. Runtime image inherits php:8.3-fpm from the language.
   laravel: {
     name: "Laravel",
     language: "php",
     category: "fullstack",
-    runtimeImage: "php:8.3-apache",
     outputDirectory: "public",
     defaultPort: 8000,
     defaultBuildCommand: "composer install --no-dev --optimize-autoloader",
-    defaultStartCommand: "php artisan serve --host=0.0.0.0 --port=8000",
+    defaultStartCommand:
+      "envsubst '$PORT' < /etc/nginx/app.conf.template > /etc/nginx/conf.d/default.conf && php-fpm -D && nginx -g 'daemon off;'",
     detection: {
       rootMarkers: ["artisan", "composer.json"],
       deps: ["laravel/framework"],
@@ -686,11 +693,11 @@ export const STACKS = {
     name: "Symfony",
     language: "php",
     category: "fullstack",
-    runtimeImage: "php:8.3-apache",
     outputDirectory: "public",
     defaultPort: 8000,
     defaultBuildCommand: "composer install --no-dev --optimize-autoloader",
-    defaultStartCommand: "php -S 0.0.0.0:8000 -t public",
+    defaultStartCommand:
+      "envsubst '$PORT' < /etc/nginx/app.conf.template > /etc/nginx/conf.d/default.conf && php-fpm -D && nginx -g 'daemon off;'",
     detection: {
       rootMarkers: ["composer.json", "symfony.lock"],
       deps: ["symfony/framework-bundle"],
@@ -709,6 +716,9 @@ export const STACKS = {
     defaultStartCommand: "java -jar target/*.jar",
     productionPaths: ["target"],
     defaultBuildStrategy: "local",
+    // Predominantly a Maven stack; bare-metal builds need `mvn` ensured. Gradle
+    // Spring Boot projects still build via their `./gradlew` wrapper (JDK-only).
+    requiredTools: ["java", "javac", "maven"],
     detection: {
       rootMarkers: ["pom.xml", "build.gradle", "build.gradle.kts"],
       deps: ["org.springframework.boot:spring-boot-starter-web", "spring-boot"],
@@ -729,6 +739,7 @@ export const STACKS = {
     defaultStartCommand: "java -jar target/quarkus-app/quarkus-run.jar",
     productionPaths: ["target"],
     defaultBuildStrategy: "local",
+    requiredTools: ["java", "javac", "maven"],
     detection: {
       rootMarkers: ["pom.xml", "build.gradle", "build.gradle.kts"],
       deps: ["io.quarkus:quarkus-core", "quarkus"],
@@ -740,16 +751,47 @@ export const STACKS = {
     },
   },
 
+  // ── Kotlin (JVM, Gradle) ─────────────────────────────────────────────────
+  // Plain Kotlin/JVM services (Ktor, http4k, or a bare `main`). A Kotlin *Spring
+  // Boot* project still matches `springboot` first (its content pattern wins in
+  // the rule order), so this catches Kotlin projects that aren't Spring/Quarkus.
+
+  kotlin: {
+    name: "Kotlin",
+    language: "java",
+    category: "backend",
+    outputDirectory: "build/libs",
+    defaultPort: 8080,
+    defaultBuildCommand: "gradle build -x test",
+    defaultStartCommand: "java -jar build/libs/*.jar",
+    productionPaths: ["build/libs"],
+    defaultBuildStrategy: "local",
+    // Gradle-based; bare-metal builds need `gradle` ensured (or the `./gradlew`
+    // wrapper, which the detector prefers when present).
+    requiredTools: ["java", "javac", "gradle"],
+    detection: {
+      rootMarkers: ["build.gradle.kts", "build.gradle"],
+      contentPatterns: {
+        "build.gradle.kts": "kotlin\\s*\\(|org\\.jetbrains\\.kotlin",
+        "build.gradle": "org\\.jetbrains\\.kotlin|kotlin[- ]",
+      },
+    },
+  },
+
   // ── C# / .NET ──────────────────────────────────────────────────────────────
 
   dotnet: {
     name: ".NET",
     language: "csharp",
     category: "backend",
-    outputDirectory: "bin/Release/net8.0/publish",
+    // Build runs `dotnet publish -c Release -o publish`, so the artifact is ./publish.
+    outputDirectory: "publish",
     defaultPort: 5000,
     defaultBuildCommand: "dotnet publish -c Release -o publish",
-    defaultStartCommand: "dotnet publish/app.dll",
+    // .NET reads ASPNETCORE_URLS (not $PORT) and defaults to :8080, so bind it
+    // explicitly to the injected port. The detector rewrites `app.dll` to the
+    // real assembly name (from the .csproj); `app` is the fallback.
+    defaultStartCommand: "ASPNETCORE_URLS=http://0.0.0.0:$PORT dotnet publish/app.dll",
     productionPaths: ["publish"],
     detection: {
       // .csproj/.fsproj/.sln are detected by suffix; rootMarkers is decorative
@@ -759,12 +801,14 @@ export const STACKS = {
   blazor: {
     name: "Blazor",
     language: "csharp",
-    category: "fullstack",
-    outputDirectory: "bin/Release/net8.0/publish/wwwroot",
+    // Blazor WebAssembly compiles to a static bundle under publish/wwwroot —
+    // it's served as files, not a running server (Blazor Server folds into `dotnet`).
+    category: "static",
+    outputDirectory: "publish/wwwroot",
     defaultPort: 5000,
     defaultBuildCommand: "dotnet publish -c Release -o publish",
-    defaultStartCommand: "dotnet publish/app.dll",
-    productionPaths: ["publish"],
+    defaultStartCommand: "",
+    productionPaths: ["publish/wwwroot"],
     detection: {
       deps: ["Microsoft.AspNetCore.Components.WebAssembly"],
     },

@@ -131,7 +131,7 @@ export {
   isSshDisconnectedError,
   SshDisconnectedError,
 } from "./system/errors";
-export { probeTcp } from "./system/reachability";
+export { probeTcp, probeHttp, waitForReady } from "./system/reachability";
 
 export { LocalExecutor, SshExecutor, SystemSshExecutor, createExecutor } from "./system/executor";
 export {

@@ -190,6 +190,53 @@ function javaInstallPlan(profile: EnvironmentProfile): ToolchainInstallPlan {
   };
 }
 
+function mavenInstallPlan(profile: EnvironmentProfile): ToolchainInstallPlan {
+  const commands: Record<string, string> = {
+    apt: "apt-get update -qq && apt-get install -y -qq maven",
+    dnf: "dnf install -y maven",
+    yum: "yum install -y maven",
+    brew: "brew install maven",
+  };
+
+  const installCommand = commands[profile.packageManager];
+  if (!installCommand) {
+    return {
+      supported: false,
+      unsupportedReason: "No supported package manager found for Maven installation",
+    };
+  }
+
+  return {
+    supported: true,
+    installCommand,
+    verifyCommand: "mvn -version",
+  };
+}
+
+function gradleInstallPlan(profile: EnvironmentProfile): ToolchainInstallPlan {
+  // Distro `gradle` packages lag badly; most projects ship a `./gradlew`
+  // wrapper (which the detector prefers), so a bare gradle binary is a
+  // best-effort fallback for projects without one.
+  const commands: Record<string, string> = {
+    apt: "apt-get update -qq && apt-get install -y -qq gradle",
+    brew: "brew install gradle",
+  };
+
+  const installCommand = commands[profile.packageManager];
+  if (!installCommand) {
+    return {
+      supported: false,
+      unsupportedReason: "No supported package manager found for Gradle installation (use the ./gradlew wrapper instead)",
+    };
+  }
+
+  return {
+    supported: true,
+    installCommand,
+    verifyCommand: "gradle --version",
+  };
+}
+
 function dotnetInstallPlan(profile: EnvironmentProfile): ToolchainInstallPlan {
   if (profile.os === "linux") {
     return {
@@ -412,6 +459,20 @@ export const toolchainCatalog = {
       installable: false,
       providedBy: "java",
     },
+    maven: {
+      label: "Maven",
+      versionCommand: "mvn -version 2>&1",
+      parseVersion: (output: string) => output.match(/Apache Maven (\S+)/)?.[1] ?? output.trim(),
+      missingMessage: "Maven is not installed",
+      installable: true,
+    },
+    gradle: {
+      label: "Gradle",
+      versionCommand: "gradle --version 2>&1",
+      parseVersion: (output: string) => output.match(/Gradle (\S+)/)?.[1] ?? output.trim(),
+      missingMessage: "Gradle is not installed",
+      installable: true,
+    },
     dotnet: {
       label: ".NET SDK",
       versionCommand: "dotnet --version",
@@ -454,6 +515,8 @@ export const toolchainCatalog = {
     php: phpInstallPlan,
     composer: composerInstallPlan,
     java: javaInstallPlan,
+    maven: mavenInstallPlan,
+    gradle: gradleInstallPlan,
     dotnet: dotnetInstallPlan,
     elixir: elixirInstallPlan,
   } as Record<string, InstallPlanFactory>,

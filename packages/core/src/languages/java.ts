@@ -1,12 +1,15 @@
-import type { LanguageDetector } from "./types";
+import type { LanguageDetector, PortDetectionContext } from "./types";
 
 /**
- * Java - `pom.xml` (Maven) and `build.gradle` / `build.gradle.kts` (Gradle)
- * mark the language. Today we don't extract a dep map from either format
+ * Java / Kotlin (JVM) - `pom.xml` (Maven) and `build.gradle` / `build.gradle.kts`
+ * (Gradle) mark the language. We don't extract a dep map from either format
  * (no Maven XML parser, no Gradle DSL parser) - those manifests are surfaced
  * here so the prepare service fetches them, and the stack detector relies on
- * STACKS `contentPatterns` to identify Spring Boot / Quarkus / etc. directly
+ * STACKS `contentPatterns` to identify Spring Boot / Quarkus / Kotlin directly
  * from the manifest text.
+ *
+ * `application.properties` / `application.yml` are surfaced too so port
+ * detection can read an explicitly configured `server.port`.
  *
  * If Java dep extraction becomes worthwhile (e.g. for a Java framework whose
  * detection rule can't be expressed in `contentPatterns`), implement parsers
@@ -16,9 +19,51 @@ function parseJavaManifest(_filename: string, _content: string): Record<string, 
   return {};
 }
 
+function clampPort(raw: string): number | null {
+  const port = parseInt(raw, 10);
+  return port > 0 && port <= 65535 ? port : null;
+}
+
+/**
+ * Recover the port from Spring-style config. `server.port=9090` in
+ * application.properties, or a `server:\n  port: 9090` block (or a bare
+ * `port:`) in application.yml/yaml.
+ *
+ * Deliberately does NOT match `server.port=${PORT:8080}` — when the app reads
+ * the port from an env var the runtime already injects `PORT`, so the stack's
+ * default is correct and we return null.
+ */
+function detectJavaPort(context: PortDetectionContext): number | null {
+  const fc = context.fileContents;
+  if (!fc) return null;
+
+  const props = fc["application.properties"];
+  if (props) {
+    const m = props.match(/^\s*server\.port\s*=\s*(\d{2,5})\s*$/m);
+    if (m) return clampPort(m[1]);
+  }
+
+  for (const name of ["application.yml", "application.yaml"]) {
+    const yml = fc[name];
+    if (!yml) continue;
+    const m = yml.match(/server:[\s\S]*?\bport:\s*["']?(\d{2,5})/) ?? yml.match(/^\s*port:\s*["']?(\d{2,5})/m);
+    if (m) return clampPort(m[1]);
+  }
+
+  return null;
+}
+
 export const javaLanguageDetector: LanguageDetector = {
   id: "java",
-  label: "Java",
-  manifestFiles: ["pom.xml", "build.gradle", "build.gradle.kts"],
+  label: "Java / Kotlin",
+  manifestFiles: [
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "application.properties",
+    "application.yml",
+    "application.yaml",
+  ],
   parseManifest: parseJavaManifest,
+  detectPort: detectJavaPort,
 };

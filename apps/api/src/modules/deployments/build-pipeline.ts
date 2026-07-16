@@ -22,6 +22,7 @@ import {
   ensurePortAvailable,
   runDeployPipeline,
   isMultiServiceRuntime,
+  waitForReady,
 } from "@repo/adapters";
 import { platform } from "../../lib/controller-helpers";
 import { webhookProxyTarget } from "../../config";
@@ -881,11 +882,47 @@ function buildDeployEnvironment(
     canOverlap: boolean;
   },
 ): DeployEnvironment {
-  const { runtime, system, targetExecutor, routeState, snapshot, logger } = phase;
+  const { runtime, system, targetExecutor, routeState, snapshot, logger, effectiveTarget } = phase;
   const { staticBareRuntime, isStaticSelfHosted, previousRuntime, plannedDomains, canOverlap } = deps;
 
   return {
     canOverlap,
+    // Post-activate readiness gate. Only wired for LOCAL targets: the app runs
+    // on this host, so a refused/timed-out probe genuinely means it failed to
+    // come up (throwing here auto-reverts to the previous deployment). Remote
+    // (SSH server) and cloud targets aren't reachable from the API process, so
+    // we leave them unprobed rather than risk failing a healthy deploy. Static
+    // self-hosted has no listening port. See deploy-pipeline.ts for the seam.
+    healthCheck:
+      isStaticSelfHosted || effectiveTarget !== "local"
+        ? undefined
+        : async (containerId: string, cfg) => {
+            let host = "127.0.0.1";
+            let port = cfg.port;
+            if (runtime.name !== "bare") {
+              // Container runtime: prefer the published host port; fall back to
+              // the container's bridge IP:port (reachable on the local daemon).
+              try {
+                const info = await runtime.getContainerInfo(containerId);
+                if (info?.hostPort) {
+                  port = info.hostPort;
+                } else if (runtime.supports("containerIp")) {
+                  const ip = await runtime.getContainerIp(containerId);
+                  if (ip) host = ip;
+                }
+              } catch {
+                /* fall back to 127.0.0.1:cfg.port */
+              }
+            }
+            logger.log(`Health check: waiting for the app to accept connections on port ${cfg.port}…\n`);
+            const ready = await waitForReady(host, port, { timeoutMs: 45_000, intervalMs: 1_000 });
+            if (!ready) {
+              throw new Error(
+                `Health check failed: the app never accepted a connection on port ${cfg.port} within 45s — it likely crashed on startup (check the runtime logs).`,
+              );
+            }
+            logger.log(`Health check passed: the app is accepting connections.\n`);
+          },
     reactivatePrevious:
       previousRuntime.name === "bare"
         ? (id: string) => (id.includes("/") ? Promise.resolve() : previousRuntime.start(id))

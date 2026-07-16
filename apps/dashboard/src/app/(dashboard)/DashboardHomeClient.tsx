@@ -10,7 +10,7 @@ import {
   ExternalLink,
   Clock,
   BookOpen,
-  Terminal,
+  Boxes,
   GitBranch,
   Settings,
   Activity,
@@ -164,14 +164,14 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
                 <p className="text-xs text-muted-foreground mt-0.5">From repository</p>
               </Link>
               <Link
-                href="/library"
+                href="/settings?tab=mcp"
                 className="bg-card border border-border/50 rounded-xl p-4 hover:bg-muted/40 hover:border-border transition-all group"
               >
                 <div className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
-                  <Terminal className="size-[18px] text-muted-foreground" />
+                  <Boxes className="size-[18px] text-muted-foreground" />
                 </div>
-                <p className="text-sm font-medium text-foreground">CLI Deploy</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Via terminal</p>
+                <p className="text-sm font-medium text-foreground">MCP Deploy</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Connect an AI agent</p>
               </Link>
               <Link
                 href="/settings"

@@ -10,3 +10,4 @@ export * from "./runtime-config";
 export * from "./workspaces";
 export * from "./languages";
 export * from "./mail-server";
+export * from "./app-templates";

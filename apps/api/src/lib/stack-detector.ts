@@ -72,13 +72,20 @@ export const MANIFEST_FILES: readonly string[] = LANGUAGE_MANIFEST_FILES;
 export function detectPackageManager(
   files: RepoFile[],
   packageJson?: { packageManager?: string; scripts?: Record<string, string>; engines?: Record<string, string> },
+  fileContents?: Record<string, string>,
 ): string {
   const fileSet = new Set(files.map((f) => f.name.toLowerCase()));
 
   // ── Non-JS languages (check manifests first) ──
   if (fileSet.has("go.mod")) return "go";
   if (fileSet.has("cargo.toml")) return "cargo";
-  if (fileSet.has("pyproject.toml")) return "uv";
+  if (fileSet.has("pyproject.toml")) {
+    // Poetry and uv both live in pyproject.toml — disambiguate by content
+    // (a `[tool.poetry]` table means Poetry). Default to uv otherwise.
+    const py = fileContents?.["pyproject.toml"];
+    if (py && /\[tool\.poetry\]/.test(py)) return "poetry";
+    return "uv";
+  }
   if (fileSet.has("pipfile")) return "pipenv";
   if (fileSet.has("requirements.txt")) return "pip";
   if (fileSet.has("gemfile")) return "bundler";
@@ -268,18 +275,29 @@ const FRAMEWORK_RULES: FrameworkRule[] = [
     fileMatch: (fs) => fs.has("composer.json") && fs.has("symfony.lock"),
   },
 
-  // ── Java ─────────────────────────────────────────────────────────────────
+  // ── Java / Kotlin ──────────────────────────────────────────────────────────
   { stack: "springboot" },
   { stack: "quarkus" },
+  // Kotlin comes after Spring/Quarkus: a Kotlin Spring Boot project matches
+  // `springboot` first (its content pattern wins), so this only catches plain
+  // Kotlin/JVM services.
+  { stack: "kotlin" },
 
   // ── C# / .NET ────────────────────────────────────────────────────────────
-  // Blazor: a .csproj is present + has the WebAssembly dep.
+  // Blazor WASM: a .csproj that references the WebAssembly package. There's no
+  // .csproj dependency parser, so scan the project file's content directly
+  // (dep-gate can't see PackageReferences the way package.json deps are parsed).
   {
     stack: "blazor",
     fileMatch: (fs) => {
       for (const name of fs) if (name.endsWith(".csproj")) return true;
       return false;
     },
+    contentMatch: (fc) =>
+      Object.entries(fc).some(
+        ([name, content]) =>
+          name.endsWith(".csproj") && /Microsoft\.AspNetCore\.Components\.WebAssembly/i.test(content),
+      ),
   },
   // .NET: any project/solution file suffix.
   {
@@ -391,9 +409,32 @@ export function detectStack(
     packageManager?: string;
     scripts?: Record<string, string>;
     engines?: Record<string, string>;
-  });
+  }, fc);
 
-  const stackDef = STACKS[matched];
+  const stackDef = STACKS[matched] as StackDefinition;
+
+  let startCommand = getStartCommand(pm, matched, packageJson);
+  let productionPaths = stackDef.productionPaths ? [...stackDef.productionPaths] : [];
+
+  // Rust: the binary is named after the crate, not a literal "app". Derive it
+  // from Cargo.toml so start + productionPaths point at the real artifact.
+  if (stackDef.language === "rust") {
+    const bin = parseCargoBinaryName(fc["cargo.toml"]);
+    if (bin) {
+      startCommand = `./target/release/${bin}`;
+      productionPaths = [`target/release/${bin}`];
+    }
+  }
+
+  // .NET: the published assembly is named after the project, not "app". Derive
+  // it from the .csproj filename so the start command runs the real DLL. Blazor
+  // (static, empty start) is skipped by the truthy-startCommand guard.
+  if (stackDef.language === "csharp" && startCommand) {
+    const assembly = parseDotnetAssemblyName(files);
+    if (assembly) {
+      startCommand = `ASPNETCORE_URLS=http://0.0.0.0:$PORT dotnet publish/${assembly}.dll`;
+    }
+  }
 
   return {
     stack: matched,
@@ -402,11 +443,11 @@ export function detectStack(
     dependencies: deps,
     packageManager: pm,
     installCommand: getInstallCommand(pm),
-    buildCommand: getBuildCommand(pm, matched, packageJson),
-    startCommand: getStartCommand(pm, matched, packageJson),
+    buildCommand: getBuildCommand(pm, matched, packageJson, files),
+    startCommand,
     buildImage: getBuildImage(matched, pm),
     outputDirectory: OUTPUT_DIRECTORIES[matched] ?? "dist",
-    productionPaths: (stackDef as StackDefinition).productionPaths ? [...(stackDef as StackDefinition).productionPaths!] : [],
+    productionPaths,
     port: detectPortFromLanguages({ packageJson, fileContents: fc }) ?? stackDef.defaultPort,
   };
 }
@@ -424,6 +465,7 @@ export function getInstallCommand(pm: string): string {
     case "cargo": return "";  // cargo build handles deps
     case "pip": return "pip install -r requirements.txt";
     case "uv": return "uv sync";
+    case "poetry": return "poetry install --no-root";
     case "pipenv": return "pipenv install --deploy";
     case "bundler": return "bundle install";
     case "composer": return "composer install --no-dev --optimize-autoloader";
@@ -446,14 +488,92 @@ function scriptRunner(pm: string): string {
   return pm;
 }
 
+/** Case-insensitive check for a file basename in the repo listing. */
+function hasFile(files: RepoFile[] | undefined, name: string): boolean {
+  return !!files?.some((f) => f.name.toLowerCase() === name);
+}
+
+/**
+ * Python install command per package manager. uv/poetry/pipenv aren't on the
+ * python:*-slim build image, so pip-install them first — keeping the build
+ * self-contained on the default image and on bare metal (both ship pip).
+ */
+function pythonInstallCommand(pm: string): string {
+  switch (pm) {
+    case "uv": return "pip install uv && uv sync";
+    case "poetry": return "pip install poetry && poetry install --no-root";
+    case "pipenv": return "pip install pipenv && pipenv install --deploy";
+    default: return "pip install -r requirements.txt";
+  }
+}
+
+/**
+ * JVM build command. Maven builds use the `mvn` bundled in the build image (or
+ * `./mvnw`); Gradle builds prefer the `./gradlew` wrapper — the image ships only
+ * a JDK, not a `gradle` binary — and fall back to `gradle` on bare metal.
+ */
+function jvmBuildCommand(pm: string, files?: RepoFile[]): string {
+  if (pm === "gradle") {
+    return `${hasFile(files, "gradlew") ? "./gradlew" : "gradle"} build -x test`;
+  }
+  return `${hasFile(files, "mvnw") ? "./mvnw" : "mvn"} clean package -DskipTests`;
+}
+
+/**
+ * Derive the Rust binary name from Cargo.toml: an explicit `[[bin]] name` wins,
+ * else the `[package] name`. Returns null when neither is present, so the caller
+ * keeps the registry's literal "app" default.
+ */
+function parseCargoBinaryName(content?: string): string | null {
+  if (!content) return null;
+  const bin = content.match(/\[\[bin\]\][\s\S]*?\bname\s*=\s*["']([^"']+)["']/);
+  if (bin) return bin[1];
+  const pkg = content.match(/\[package\][\s\S]*?\bname\s*=\s*["']([^"']+)["']/);
+  if (pkg) return pkg[1];
+  return null;
+}
+
+/**
+ * Derive the .NET assembly name from the project's `*.csproj`/`*.fsproj`
+ * filename — the published DLL defaults to the project name. Returns null when
+ * no project file is present, so the caller keeps the registry's "app" fallback.
+ */
+function parseDotnetAssemblyName(files: RepoFile[]): string | null {
+  for (const f of files) {
+    const lower = f.name.toLowerCase();
+    if (lower.endsWith(".csproj") || lower.endsWith(".fsproj")) {
+      return f.name.slice(0, f.name.lastIndexOf("."));
+    }
+  }
+  return null;
+}
+
 /** Build command - prefers project scripts, then falls back to registry defaults */
-export function getBuildCommand(pm: string, stack: StackId, packageJson?: Record<string, unknown>): string {
+export function getBuildCommand(
+  pm: string,
+  stack: StackId,
+  packageJson?: Record<string, unknown>,
+  files?: RepoFile[],
+): string {
   const scripts = (packageJson?.scripts ?? {}) as Record<string, string>;
   const runner = scriptRunner(pm);
 
   // JS/TS: if the project has a build script, always prefer it
   if (scripts.build && ["npm", "yarn", "pnpm", "bun"].includes(pm)) {
     return `${runner} build`;
+  }
+
+  const lang = STACKS[stack].language;
+
+  // Python: install per detected package manager; Django also collects static.
+  if (lang === "python") {
+    const install = pythonInstallCommand(pm);
+    return stack === "django" ? `${install} && python manage.py collectstatic --noinput` : install;
+  }
+
+  // JVM: Maven vs Gradle, wrapper-aware.
+  if (lang === "java") {
+    return jvmBuildCommand(pm, files);
   }
 
   // Fall back to the registry default
@@ -475,6 +595,12 @@ export function getStartCommand(pm: string, stack: StackId, packageJson?: Record
   const lang = STACKS[stack].language;
   if (main && (lang === "javascript" || lang === "typescript")) {
     return `node ${main}`;
+  }
+
+  // JVM Gradle output lands in build/libs; Maven keeps the registry default
+  // (target/*.jar for Spring Boot, quarkus-run.jar for Quarkus).
+  if (lang === "java" && pm === "gradle") {
+    return "java -jar build/libs/*.jar";
   }
 
   // Fall back to the registry default

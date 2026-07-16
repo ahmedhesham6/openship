@@ -65,7 +65,91 @@ function needsMultiStage(config: BuildConfig): boolean {
   return config.buildImage !== config.runtimeImage;
 }
 
+/** The install+build RUN line (with progress markers), or null if neither step. */
+function installBuildRunLine(config: BuildConfig, envPrefix: string): string | null {
+  const steps: string[] = [];
+  if (config.installCommand) {
+    steps.push(`printf '${formatDockerBuildEvent("install", "running")}\\n'`);
+    steps.push(buildRunCommand(config.installCommand, envPrefix));
+    steps.push(`printf '${formatDockerBuildEvent("install", "completed")}\\n'`);
+  }
+  if (config.buildCommand) {
+    steps.push(`printf '${formatDockerBuildEvent("build", "running")}\\n'`);
+    steps.push(buildRunCommand(config.buildCommand, envPrefix));
+    steps.push(`printf '${formatDockerBuildEvent("build", "completed")}\\n'`);
+  }
+  return steps.length > 0 ? `RUN ${steps.join(" && ")}` : null;
+}
+
+/** PHP stacks are served php-fpm + nginx. The php:*-cli build image has no
+ *  Composer and the php:*-fpm runtime image has no web server, so both are added
+ *  here; the launch itself (envsubst + php-fpm + nginx) is the stack's start
+ *  command, because the runtime overrides the image CMD at `docker run`. */
+function isPhpRuntime(config: BuildConfig): boolean {
+  return /^php:/.test(config.runtimeImage);
+}
+
+// nginx server block for a public/-docroot PHP app. `${PORT}` is substituted at
+// start time by envsubst; nginx's own $uri/$document_root/etc. are written
+// literally (single-quoted at build time) so envsubst leaves them intact.
+const PHP_NGINX_TEMPLATE_LINES = [
+  "server {",
+  "    listen ${PORT} default_server;",
+  "    root /app/public;",
+  "    index index.php index.html;",
+  "    location / { try_files $uri $uri/ /index.php?$query_string; }",
+  "    location ~ \\.php$ {",
+  "        fastcgi_pass 127.0.0.1:9000;",
+  "        fastcgi_index index.php;",
+  "        include fastcgi_params;",
+  "        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;",
+  "    }",
+  "}",
+];
+
+function generatePhpDockerfile(config: BuildConfig): string {
+  const sourceDir = builderSourceDir(
+    normalizeDockerRootDirectory(config.rootDirectory, config.localPath),
+  );
+  const envPrefix = buildEnvPrefix(config.envVars);
+  const stepsLine = installBuildRunLine(config, envPrefix);
+  const nginxTemplate = PHP_NGINX_TEMPLATE_LINES.map((line) => `'${line}'`).join(" ");
+
+  const lines: string[] = [
+    `FROM ${config.buildImage} AS builder`,
+    `WORKDIR /workspace`,
+    `COPY . /workspace`,
+    // php:*-cli ships no Composer — pull the binary from the official image.
+    `COPY --from=composer:2 /usr/bin/composer /usr/bin/composer`,
+    // pdo_mysql is the common denominator (Laravel/Symfony + MySQL/MariaDB);
+    // app-specific extensions are a per-project follow-on.
+    `RUN docker-php-ext-install pdo_mysql > /dev/null`,
+    `WORKDIR ${sourceDir}`,
+  ];
+  if (stepsLine) lines.push(stepsLine);
+
+  lines.push(
+    `FROM ${config.runtimeImage} AS runtime`,
+    `RUN apt-get update && apt-get install -y --no-install-recommends nginx gettext-base && rm -rf /var/lib/apt/lists/* && rm -f /etc/nginx/sites-enabled/default && docker-php-ext-install pdo_mysql > /dev/null`,
+    `COPY --from=builder ${sourceDir} /app`,
+    `WORKDIR /app`,
+    `RUN printf '%s\\n' ${nginxTemplate} > /etc/nginx/app.conf.template`,
+    `EXPOSE ${config.port}`,
+  );
+  if (config.startCommand) {
+    lines.push(`CMD ["sh", "-c", ${JSON.stringify(config.startCommand)}]`);
+  }
+
+  return lines.join("\n");
+}
+
 export function generateDockerfile(config: BuildConfig): string {
+  // PHP stacks need a bespoke fpm+nginx recipe (Composer in build, nginx in
+  // runtime) that the generic single-CMD template can't express.
+  if (isPhpRuntime(config) && needsMultiStage(config)) {
+    return generatePhpDockerfile(config);
+  }
+
   const sourceDir = builderSourceDir(
     normalizeDockerRootDirectory(config.rootDirectory, config.localPath),
   );
@@ -101,22 +185,9 @@ export function generateDockerfile(config: BuildConfig): string {
 
   // Single RUN for install+build - avoids costly Docker layer commits between steps.
   // Each step emits markers so the UI stepper can track progress.
-  const steps: string[] = [];
-
-  if (config.installCommand) {
-    steps.push(`printf '${formatDockerBuildEvent("install", "running")}\\n'`);
-    steps.push(buildRunCommand(config.installCommand, envPrefix));
-    steps.push(`printf '${formatDockerBuildEvent("install", "completed")}\\n'`);
-  }
-
-  if (config.buildCommand) {
-    steps.push(`printf '${formatDockerBuildEvent("build", "running")}\\n'`);
-    steps.push(buildRunCommand(config.buildCommand, envPrefix));
-    steps.push(`printf '${formatDockerBuildEvent("build", "completed")}\\n'`);
-  }
-
-  if (steps.length > 0) {
-    lines.push(`RUN ${steps.join(" && ")}`);
+  const stepsLine = installBuildRunLine(config, envPrefix);
+  if (stepsLine) {
+    lines.push(stepsLine);
   }
 
   if (multiStage) {
