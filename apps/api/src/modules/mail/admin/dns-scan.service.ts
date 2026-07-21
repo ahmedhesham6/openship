@@ -328,12 +328,21 @@ async function checkDkim(domain: string, exp?: ExpectedRecord): Promise<DnsCheck
   }
 }
 
+// DMARC Policy Record identification, per RFC 9989 sections 4.7/4.8/4.10:
+// the record must start with the version tag (no leading WSP), the tag name
+// is case-insensitive while the value is case-sensitively "DMARC1", WSP
+// (space/tab) may surround "=", and the tag must end at ";", WSP, or end of
+// record. So "v=dmarc1" is ignored outright and "v=DMARC10" is not a policy
+// record for this version of DMARC.
+const DMARC_VERSION_TAG = /^[vV][ \t]*=[ \t]*DMARC1(?:[ \t;]|$)/;
+
 async function checkDmarc(domain: string, exp?: ExpectedRecord): Promise<DnsCheck | null> {
   if (!exp?.value) return null;
   const name = exp.name || `_dmarc.${domain}`;
   try {
     const txt = (await resolveTxt(name)).map((parts) => parts.join(""));
-    const dmarc = txt.find((t) => /^v=DMARC1\b/i.test(t));
+    const dmarcRecords = txt.filter((t) => DMARC_VERSION_TAG.test(t));
+    const dmarc = dmarcRecords[0];
     if (!dmarc) {
       return {
         key: "dmarc",
@@ -345,6 +354,20 @@ async function checkDmarc(domain: string, exp?: ExpectedRecord): Promise<DnsChec
         expected: exp.value,
         actual: "",
         message: "No DMARC record found. Some receivers will treat this as a risk signal.",
+      };
+    }
+    if (dmarcRecords.length > 1) {
+      return {
+        key: "dmarc",
+        label: "DMARC policy",
+        description: "Tells receivers what to do when SPF/DKIM fail for this domain.",
+        queriedName: name,
+        recordType: "TXT",
+        status: "fail",
+        expected: exp.value,
+        actual: dmarcRecords.join(" | "),
+        message:
+          "Multiple DMARC records found. Receivers discard every DMARC record at this name, so none of them apply. Publish exactly one v=DMARC1 TXT record at this name.",
       };
     }
     return {
