@@ -3,12 +3,19 @@ import { cookies, headers } from "next/headers";
 import "./globals.css";
 import { ThemeProvider, ThemeScript } from "@/components/theme-provider";
 import { ToastProvider } from "@/components/toast";
-import { I18nProvider, LOCALE_COOKIE } from "@/components/i18n-provider";
+import { I18nProvider } from "@/components/i18n-provider";
 import { AuthProvider } from "@/context/AuthContext";
 import { NetworkErrorHandler } from "@/components/network-error-handler";
 import { ModalProvider } from "@/context/ModalContext";
 import { DesktopChrome } from "@/components/desktop-chrome";
-import { defaultLocale, isRtl, loadDictionary, locales, type Locale } from "@/i18n";
+import {
+  defaultLocale,
+  isRtl,
+  loadDictionary,
+  LOCALE_COOKIE,
+  locales,
+  type Locale,
+} from "@/i18n";
 
 /** Resolve the request locale server-side: explicit cookie first, then the
  *  browser's Accept-Language, else the default. Keeps SSR and first paint in
