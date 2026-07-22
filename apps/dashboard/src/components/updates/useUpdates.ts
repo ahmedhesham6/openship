@@ -214,18 +214,30 @@ export function useUpdates(): UseUpdates {
     if (!current) return;
     setCurrentVersion(current);
 
-    const [prefs, remote] = await Promise.all([getPrefs(), fetchRemote()]);
+    // Also pull operator-pushed platform notices here (not just on cloud) so a
+    // self-hosted/desktop operator sees danger/maintenance advisories through
+    // the SAME banner. Merge them with the GitHub release advisories.
+    const [prefs, remote, notices] = await Promise.all([
+      getPrefs(),
+      fetchRemote(),
+      fetchNotices().catch(() => ({ advisories: [] })),
+    ]);
     setMutedState(prefs.muted);
     setLatest(remote.latest);
-    setState(
-      resolveUpdateState({
-        currentVersion: current,
-        latestRelease: remote.latest,
-        manifest: remote.manifest,
-        dismissed: prefs.dismissed,
-        muted: prefs.muted,
-      }),
+    const base = resolveUpdateState({
+      currentVersion: current,
+      latestRelease: remote.latest,
+      manifest: remote.manifest,
+      dismissed: prefs.dismissed,
+      muted: prefs.muted,
+    });
+    const noticeAdvisories = notices.advisories.filter(
+      (a) => a.severity === "critical" || (!prefs.muted && !prefs.dismissed.includes(a.id)),
     );
+    const advisories = [...base.advisories, ...noticeAdvisories]
+      .filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i)
+      .sort((x, y) => (SEVERITY_RANK[x.severity] ?? 9) - (SEVERITY_RANK[y.severity] ?? 9));
+    setState({ ...base, advisories });
 
     // "What's new": show once when the running version is newer than the last
     // version we announced. First run (no record) just seeds the baseline.

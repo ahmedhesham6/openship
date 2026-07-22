@@ -1,5 +1,7 @@
 import { repos, type Domain, type Project } from "@repo/db";
 import {
+  isLoopbackHost,
+  isReservedLoopbackPort,
   managedHostnameToSlug,
   publicEndpointHostname,
   routeDomainRowToPublicEndpoint,
@@ -296,6 +298,7 @@ export async function reapplyProjectLiveRoutes(
   }
 
   const resolveTargetUrl = async (port: number): Promise<string | null> => {
+    let host: string;
     if (runtime.supports("containerIp")) {
       const ip = await runtime.getContainerIp(containerId);
       if (!ip) {
@@ -304,10 +307,22 @@ export async function reapplyProjectLiveRoutes(
         );
         return null;
       }
-      return `http://${ip}:${port}`;
+      host = ip;
+    } else {
+      // Bare metal: the app runs directly on the host.
+      host = "127.0.0.1";
     }
-    // Bare metal: the app runs directly on the host.
-    return `http://127.0.0.1:${port}`;
+    // Never proxy a public route at a reserved control-plane/mgmt port on the
+    // host loopback — that would expose the admin API (env.PORT) or the
+    // unauthenticated OpenResty mgmt port (9145) to the internet. Only guards
+    // loopback: a container's own IP:<port> is the app's, not ours.
+    if (isLoopbackHost(host) && isReservedLoopbackPort(port)) {
+      console.warn(
+        `[project-route] ${project.slug}: refusing reserved loopback upstream port ${port} for a public route`,
+      );
+      return null;
+    }
+    return `http://${host}:${port}`;
   };
 
   const registers: RouteRegister[] = [];

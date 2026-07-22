@@ -1,4 +1,4 @@
-import { api } from "./client";
+import { api, getApiBaseUrl } from "./client";
 import { endpoints } from "./endpoints";
 
 // ─── Types (mirror apps/api docker-inspect.service.ts DiscoveredStack) ────────
@@ -26,6 +26,11 @@ export interface DiscoveredService {
   dependsOn: string[];
   command?: string;
   restart?: string;
+  /** Set when this container IS the edge proxy (80/443) — dropped from import;
+   *  Openship's OpenResty replaces it. */
+  proxyKind?: "nginx" | "caddy" | "apache" | "traefik" | "haproxy" | "openresty";
+  /** Host edge ports (80/443) it publishes — reserved for Openship's edge. */
+  edgePorts?: number[];
   warnings: string[];
 }
 
@@ -64,6 +69,10 @@ export interface MigrationPreviewService {
   classification: "registry" | "build";
   blocked: boolean;
   reason?: string;
+  /** This service IS the edge proxy → dropped from import. */
+  edgeProxy?: boolean;
+  /** Non-proxy service whose 80/443 host bindings are stripped (reserved). */
+  edgePortsReserved?: number[];
   volumes: Array<{ name: string; target: string }>;
   /** App-data bind paths that WILL be copied to the target. */
   bindMounts: string[];
@@ -78,6 +87,8 @@ export interface MigrationPreview {
   volumesToMove: string[];
   hasBlocked: boolean;
   downtimeWarning: boolean;
+  /** Reverse proxies that won't be imported (Openship's edge replaces them). */
+  droppedProxies: string[];
   warnings: string[];
 }
 
@@ -109,12 +120,85 @@ export interface MigrationRun {
  * team-instance/data migration.
  */
 export const dockerMigrationApi = {
-  /** Read-only: inspect a server's Docker and return the adoptable stack. */
+  /** Read-only: inspect a server's Docker and return the adoptable stack.
+   *  SSH connect + `docker inspect` across every container easily exceeds the
+   *  client's 15s default (esp. through the same-origin proxy's extra hop under
+   *  `openship up`), so give it real headroom like checkServer does. */
   scan: (serverId: string) =>
     api.post<{ success: boolean; stack: DiscoveredStack }>(
       endpoints.dockerMigration.scan,
       { serverId },
+      { timeout: 120_000 },
     ),
+
+  /**
+   * Streaming inspect (SSE): same result as scan(), but step-progress events +
+   * NO fixed client timeout — the stream stays alive via heartbeats, so a slow
+   * SSH + docker inspect (esp. through the same-origin proxy hop) can't be
+   * aborted mid-flight. Resolves with the stack; rejects on the error frame.
+   */
+  scanStream: (
+    serverId: string,
+    opts: { onProgress?: (message: string) => void } = {},
+  ): Promise<DiscoveredStack> =>
+    new Promise((resolve, reject) => {
+      void (async () => {
+        const url = `${getApiBaseUrl()}${endpoints.dockerMigration.scanStream}?serverId=${encodeURIComponent(serverId)}`;
+        let res: Response;
+        try {
+          res = await fetch(url, {
+            method: "GET",
+            credentials: "include",
+            headers: { Accept: "text/event-stream" },
+          });
+        } catch (e) {
+          reject(e instanceof Error ? e : new Error(String(e)));
+          return;
+        }
+        if (!res.ok || !res.body) {
+          reject(new Error(await res.text().catch(() => res.statusText)));
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let settled = false;
+        const finish = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          try { void reader.cancel(); } catch { /* noop */ }
+          fn();
+        };
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            // Parse whole "…\n\n" frames so a large result payload split across
+            // reads is never half-parsed.
+            let nl: number;
+            while ((nl = buf.indexOf("\n\n")) !== -1) {
+              const frame = buf.slice(0, nl);
+              buf = buf.slice(nl + 2);
+              const dataLine = frame.split("\n").find((l) => l.startsWith("data:"));
+              if (!dataLine) continue;
+              let msg: { type?: string; message?: string; stack?: DiscoveredStack; error?: string };
+              try {
+                msg = JSON.parse(dataLine.slice(5).trim());
+              } catch {
+                continue;
+              }
+              if (msg.type === "progress" && msg.message) opts.onProgress?.(msg.message);
+              else if (msg.type === "result" && msg.stack) return finish(() => resolve(msg.stack!));
+              else if (msg.type === "error") return finish(() => reject(new Error(msg.error || "Scan failed")));
+            }
+          }
+          if (!settled) reject(new Error("Scan stream ended without a result"));
+        } catch (e) {
+          if (!settled) reject(e instanceof Error ? e : new Error(String(e)));
+        }
+      })();
+    }),
 
   /** Create an Openship project from the selected discovered services (records only). */
   adopt: (input: { serverId: string; projectName: string; serviceNames: string[] }) =>
@@ -129,6 +213,7 @@ export const dockerMigrationApi = {
     api.post<{ success: boolean; preview: MigrationPreview }>(
       endpoints.dockerMigration.preview,
       input,
+      { timeout: 120_000 },
     ),
 
   /** Start a full migration. Returns the run id + the cutover confirmation token. */

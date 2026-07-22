@@ -26,6 +26,11 @@ type ProjectStatusSource = {
   /** True while an atomic teardown is in flight (the real in-progress flag;
    *  teardown hard-deletes on success, so `deletedAt` is rarely set). */
   deletionInProgress?: boolean | null;
+  /** Marks the Openship control-plane self-app. It IS the running host service and
+   *  has no deployment behind it, so it must never fall through to "draft". */
+  appTemplateId?: string | null;
+  isApp?: boolean | null;
+  hasServer?: boolean | null;
 };
 
 // CSS-only presentation. The human-readable label is resolved from the
@@ -81,6 +86,13 @@ export function projectStatusLabel(status: ProjectStatus, t: Dictionary): string
 export function getProjectStatus(project: ProjectStatusSource): ProjectStatus {
   if (project.deletedAt || project.deletionInProgress) {
     return "deleting";
+  }
+
+  // The Openship control-plane self-app IS the running host process; it has no
+  // deployment record, so it must never render as "draft" with a "Deploy now"
+  // CTA. If you can see the dashboard, it's live.
+  if (project.appTemplateId === "openship") {
+    return "live";
   }
 
   switch (project.latestDeploymentStatus) {

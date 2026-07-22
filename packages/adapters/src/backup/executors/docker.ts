@@ -334,9 +334,18 @@ export class DockerBackupExecutor implements BackupExecutor {
     await this.ensureImage(HELPER_IMAGE);
     const clearCmd = opts?.clearTarget ? "find /to -mindepth 1 -delete 2>/dev/null || true; " : "";
     // Fixed mount points only — no untrusted value enters the shell string.
+    //
+    // A plain `tar … | tar …` exits with the RECEIVING tar's status under
+    // POSIX sh, so a FAILED source read (perms, unreadable volume) still
+    // reports success and silently leaves /to empty/partial — data loss. We
+    // stash the source tar's exit code and require BOTH tars to succeed before
+    // reporting size, so any read failure fails the copy loudly.
+    const copyCmd =
+      `${clearCmd}{ tar -C /from -cf - . ; echo $? > /tmp/src.rc ; } | tar -C /to -xf - ; ` +
+      `rc=$? ; [ "$(cat /tmp/src.rc 2>/dev/null)" = 0 ] && [ "$rc" = 0 ] && du -sk /to 2>/dev/null | cut -f1`;
     const helper = await this.dockerode.createContainer({
       Image: HELPER_IMAGE,
-      Cmd: ["sh", "-c", `${clearCmd}tar -C /from -cf - . | tar -C /to -xf - && du -sk /to 2>/dev/null | cut -f1`],
+      Cmd: ["sh", "-c", copyCmd],
       HostConfig: {
         Binds: [`${src.source}:/from:ro`, `${dst.source}:/to`],
       },
@@ -357,6 +366,51 @@ export class DockerBackupExecutor implements BackupExecutor {
       }
       const kb = parseInt(out.split(/\s+/).pop() || "0", 10);
       return { bytesWritten: Number.isFinite(kb) ? kb * 1024 : 0 };
+    } finally {
+      await helper.remove({ force: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * Does the named volume behind `sourceId` already exist on this daemon, and
+   * does it hold data? Used to refuse overwriting a pre-existing, non-empty
+   * target volume. Fixed mount point (/probe) — no untrusted value hits the
+   * shell. An unreadable/ambiguous result is reported as NON-empty (empty:false)
+   * so we err on the side of NOT clobbering.
+   */
+  async probeVolume(
+    service: ServiceHandle,
+    sourceId: string,
+  ): Promise<{ exists: boolean; empty: boolean }> {
+    const source = (await this.listSources(service)).find((s) => s.id === sourceId);
+    if (!source || source.type !== "volume" || !source.source) {
+      return { exists: false, empty: true };
+    }
+    try {
+      await this.dockerode.getVolume(source.source).inspect();
+    } catch {
+      return { exists: false, empty: true }; // not present → safe to create
+    }
+    await this.ensureImage(HELPER_IMAGE);
+    const helper = await this.dockerode.createContainer({
+      Image: HELPER_IMAGE,
+      Cmd: [
+        "sh",
+        "-c",
+        'if [ -z "$(ls -A /probe 2>/dev/null)" ]; then echo VOLEMPTY; else echo VOLDATA; fi',
+      ],
+      HostConfig: { Binds: [`${source.source}:/probe:ro`] },
+      Tty: true,
+      NetworkDisabled: true,
+    });
+    try {
+      await helper.start();
+      await helper.wait();
+      const out = await helper
+        .logs({ follow: false, stdout: true, stderr: true })
+        .then((b) => b.toString())
+        .catch(() => "");
+      return { exists: true, empty: out.includes("VOLEMPTY") };
     } finally {
       await helper.remove({ force: true }).catch(() => {});
     }

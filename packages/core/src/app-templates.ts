@@ -22,6 +22,7 @@
  */
 
 import type { ComposeHealthcheck } from "./types";
+import type { AppManagement, AppSettingGroup } from "./app-settings";
 
 export type AppCategory = "backend" | "database" | "cms" | "mail" | "analytics" | "automation" | "other";
 
@@ -99,6 +100,14 @@ export interface AppTemplate {
   configFields?: readonly AppConfigField[];
   /** Dashboard route to hand off to (flow kind, e.g. "/emails"). */
   flowHref?: string;
+  /** Curated day-2 settings surfaced after install (see app-settings.ts). */
+  settings?: readonly AppSettingGroup[];
+  /**
+   * How the installed app is managed. Omit → derived: "schema" when `settings`
+   * exist, else none (raw project tabs only). Set explicitly for apps with a
+   * bespoke surface (mail → /emails).
+   */
+  management?: AppManagement;
 }
 
 /**
@@ -171,6 +180,50 @@ const CONVEX_TEMPLATE: AppTemplate = {
       secret: true,
     },
   ],
+  management: { kind: "schema" },
+  settings: [
+    {
+      id: "general",
+      label: "General",
+      fields: [
+        {
+          key: "DISABLE_BEACON",
+          service: "backend",
+          label: "Disable telemetry beacon",
+          type: "boolean",
+          default: "true",
+        },
+      ],
+    },
+    {
+      id: "advanced",
+      label: "Advanced",
+      description: "Changing these regenerates or invalidates the deployment's admin key — the dashboard and CLI must be re-authenticated afterwards.",
+      fields: [
+        {
+          key: "INSTANCE_NAME",
+          service: "backend",
+          label: "Instance name",
+          help: "Sets the deployment name. Changing it AFTER the first deploy invalidates the admin key and locks the dashboard/CLI out — safest to set it here, at install.",
+          type: "text",
+          default: "convex-self-hosted",
+          advanced: true,
+          requiresRedeploy: true,
+          installStep: true,
+        },
+        {
+          key: "INSTANCE_SECRET",
+          service: "backend",
+          label: "Instance secret",
+          help: "Signs the admin key and internal tokens. Rotating it invalidates existing admin keys.",
+          type: "password",
+          secret: true,
+          advanced: true,
+          requiresRedeploy: true,
+        },
+      ],
+    },
+  ],
 };
 
 /**
@@ -213,6 +266,58 @@ const N8N_TEMPLATE: AppTemplate = {
       help: "Auto-generated. Encrypts stored credentials.",
       generate: "secret",
       secret: true,
+    },
+  ],
+  management: { kind: "schema" },
+  settings: [
+    {
+      id: "general",
+      label: "General",
+      fields: [
+        {
+          key: "GENERIC_TIMEZONE",
+          service: "n8n",
+          label: "Timezone",
+          help: "Used by Schedule and Cron nodes.",
+          type: "text",
+          default: "UTC",
+          placeholder: "UTC",
+          installStep: true,
+        },
+        {
+          key: "N8N_DEFAULT_LOCALE",
+          service: "n8n",
+          label: "Locale",
+          type: "text",
+          default: "en",
+          placeholder: "en",
+        },
+      ],
+    },
+    {
+      id: "executions",
+      label: "Executions",
+      description: "Bound stored execution history so the data volume doesn't grow without limit.",
+      fields: [
+        {
+          key: "EXECUTIONS_DATA_PRUNE",
+          service: "n8n",
+          label: "Prune old executions",
+          type: "boolean",
+          default: "true",
+        },
+        {
+          key: "EXECUTIONS_DATA_MAX_AGE",
+          service: "n8n",
+          label: "Keep executions for (hours)",
+          help: "336 hours = 14 days.",
+          type: "number",
+          default: "336",
+          integer: true,
+          min: 1,
+          advanced: true,
+        },
+      ],
     },
   ],
 };
@@ -636,7 +741,48 @@ const EXCALIDRAW_TEMPLATE: AppTemplate = {
   ],
 };
 
+/**
+ * Openship Mail — a "flow" app: it doesn't instantiate compose services, it
+ * hands off to the mail PROVIDER WIZARD at /apps/new/mail, which offers:
+ *   • Self-host        → the iRedMail provisioning flow at /emails.
+ *   • Connect existing → deploy just the Zero webmail UI against an external
+ *                        IMAP/SMTP backend (Amazon SES / Gmail / Fastmail / custom).
+ * Present in the catalog so mail is a first-class one-click app alongside the rest.
+ */
+const MAIL_FLOW: AppTemplate = {
+  id: "mail",
+  name: "Openship Mail",
+  description: "A complete self-hosted mail server — SMTP/IMAP + webmail on your own domain.",
+  kind: "flow",
+  logo: "mail-webmail",
+  category: "mail",
+  tags: ["mail", "email", "smtp", "imap"],
+  // Catalog click → the provider wizard (chooses self-host vs connect-existing).
+  flowHref: "/apps/new/mail",
+  // Bespoke day-2 management surface — the mail provisioning + admin wizard.
+  management: { kind: "custom", href: "/emails" },
+};
+
+/**
+ * Buzz (github.com/block/buzz, Apache-2.0) — a self-hostable workspace on a Nostr
+ * relay where humans and AI agents collaborate: chat, code patches, reviews, and
+ * workflows recorded as signed events in one audit log. Catalog placeholder for
+ * now: listed but left out of AVAILABLE_APP_IDS, so the UI shows it dimmed as
+ * "Coming soon" until an install path is wired. `kind: "template"` keeps it a
+ * neutral entry (no services yet) — whoever enables it fills in the deploy shape.
+ */
+const BUZZ_TEMPLATE: AppTemplate = {
+  id: "buzz",
+  name: "Buzz",
+  description: "Self-hostable workspace where humans and AI agents collaborate — chat, code, reviews, and workflows in one audit log.",
+  kind: "template",
+  logo: "buzz",
+  category: "other",
+  tags: ["collaboration", "ai", "agents", "chat", "workflows", "nostr"],
+};
+
 export const APP_TEMPLATES: readonly AppTemplate[] = [
+  MAIL_FLOW,
   CONVEX_TEMPLATE,
   N8N_TEMPLATE,
   GHOST_TEMPLATE,
@@ -652,8 +798,37 @@ export const APP_TEMPLATES: readonly AppTemplate[] = [
   STIRLING_PDF_TEMPLATE,
   IT_TOOLS_TEMPLATE,
   EXCALIDRAW_TEMPLATE,
+  // ── Coming soon (not in AVAILABLE_APP_IDS) ──
+  BUZZ_TEMPLATE,
 ];
 
 export function getAppTemplate(id: string): AppTemplate | undefined {
   return APP_TEMPLATES.find((t) => t.id === id);
+}
+
+/**
+ * Apps enabled (installable) in THIS version. Everything else in the catalog is
+ * still shown — dimmed + "Coming soon", not installable — until it's ready.
+ * Single switch: add an id here to light it up (and guard install server-side).
+ */
+export const AVAILABLE_APP_IDS: ReadonlySet<string> = new Set(["mail", "n8n", "convex"]);
+
+/** Is this catalog app installable now, or a dimmed "coming soon" placeholder? */
+export function isAppAvailable(id: string): boolean {
+  return AVAILABLE_APP_IDS.has(id);
+}
+
+/** Curated day-2 settings groups for an app (empty when it has none). */
+export function getAppSettings(template: AppTemplate): readonly AppSettingGroup[] {
+  return template.settings ?? [];
+}
+
+/**
+ * How an app is managed: an explicit `management`, else "schema" when it
+ * declares settings, else null (no curated surface — raw project tabs only).
+ */
+export function getAppManagement(template: AppTemplate): AppManagement | null {
+  if (template.management) return template.management;
+  if (template.settings && template.settings.length > 0) return { kind: "schema" };
+  return null;
 }

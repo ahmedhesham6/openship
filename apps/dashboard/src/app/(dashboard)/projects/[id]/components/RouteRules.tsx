@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
-import { Loader2, Plus, Shield, Trash2 } from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown, Loader2, Plus, Shield, Trash2 } from "lucide-react";
 import { projectsApi, getApiErrorMessage, type RouteRuleRow } from "@/lib/api";
 import type { RouteRuleSpec } from "@repo/core";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
@@ -44,6 +44,10 @@ export function RouteRules() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Collapsed by default (advanced/optional, like the routing card); auto-opens
+  // once on load when the project actually has rules.
+  const [open, setOpen] = useState(false);
+  const autoOpened = useRef(false);
 
   // New-rule form
   const [pathPrefix, setPathPrefix] = useState("");
@@ -64,7 +68,12 @@ export function RouteRules() {
     setLoading(true);
     try {
       const res = await projectsApi.listRouteRules(projectData.id);
-      setRules(res?.rules ?? []);
+      const list = res?.rules ?? [];
+      setRules(list);
+      if (!autoOpened.current && list.length > 0) {
+        setOpen(true);
+        autoOpened.current = true;
+      }
     } catch (err) {
       showToast(getApiErrorMessage(err, w.loadFailed), "error", w.title);
     } finally {
@@ -184,17 +193,35 @@ export function RouteRules() {
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border/50 bg-card">
-      <div className="flex items-start gap-3 border-b border-border/40 px-5 py-4">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10">
-          <Shield className="size-4 text-primary" />
+      {/* Header doubles as the collapse toggle — matches the routing card so both
+          edge-config sections sit collapsed together in the Domains tab. */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-start transition-colors hover:bg-muted/20"
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/15">
+            <Shield className="size-[18px]" />
+          </div>
+          <div className="text-start">
+            <h3 className="text-[14px] font-semibold text-foreground">{w.title}</h3>
+            <p className="mt-0.5 text-[12px] text-muted-foreground">{w.description}</p>
+          </div>
         </div>
-        <div className="min-w-0 flex-1">
-          <h3 className="text-[14px] font-semibold text-foreground">{w.title}</h3>
-          <p className="mt-0.5 text-[12px] text-muted-foreground">{w.description}</p>
+        <div className="flex shrink-0 items-center gap-2">
+          {rules.length > 0 && (
+            <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+              {rules.length}
+            </span>
+          )}
+          <ChevronDown className={`size-4 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
         </div>
-      </div>
+      </button>
 
-      <div className="space-y-4 px-5 py-4">
+      {open && (
+      <div className="space-y-4 border-t border-border/40 px-5 py-4">
         {/* Existing rules */}
         {loading ? (
           <div className="flex items-center gap-2 py-2 text-sm text-muted-foreground">
@@ -302,6 +329,7 @@ export function RouteRules() {
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }

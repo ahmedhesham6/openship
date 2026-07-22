@@ -33,7 +33,8 @@
     "sourceLocal": "Lokal",
     "services": "Dienste",
     "static": "Statisch",
-    "standalone": "Standalone"
+    "standalone": "Standalone",
+    "updateAvailable": "Update"
   },
   "hosting": {
     "cloud": "Cloud",
@@ -108,6 +109,7 @@
     "production": "Produktion",
     "lastDeploy": "Letzte Bereitstellung",
     "tabs": {
+      "appSettings": "Einstellungen",
       "overview": "Übersicht",
       "services": "Dienste",
       "domains": "Domains",

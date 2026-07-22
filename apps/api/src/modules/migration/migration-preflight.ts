@@ -42,6 +42,12 @@ export interface MigrationPreviewService {
   /** Built-from-source → can't migrate in v1. */
   blocked: boolean;
   reason?: string;
+  /** This service IS the edge proxy (80/443) → dropped from import; Openship's
+   *  OpenResty replaces it and reclaims the port. */
+  edgeProxy?: boolean;
+  /** Non-proxy service that published 80/443 → those host bindings are stripped
+   *  (reserved for Openship's edge); the app is routed through OpenResty. */
+  edgePortsReserved?: number[];
   /** Named volumes that will be copied (cross-server) / reused (same-server). */
   volumes: Array<{ name: string; target: string }>;
   /** App-data bind-mount host paths that WILL be copied to the target. */
@@ -60,6 +66,11 @@ export interface MigrationPreview {
   hasBlocked: boolean;
   /** A stop-copy-start window applies (originals are stopped during the move). */
   downtimeWarning: boolean;
+  /** Reverse-proxy services that will NOT be imported (Openship's edge replaces
+   *  them). They're left running and untouched by the migration; add a domain to
+   *  a migrated service to move onto Openship's edge (its consent modal reclaims
+   *  80/443 then). */
+  droppedProxies: string[];
   /** Stack-level notes (custom networks flattened, etc.). */
   warnings: string[];
 }
@@ -80,6 +91,7 @@ export async function buildMigrationPreview(opts: {
   const services: MigrationPreviewService[] = chosen.map((s) => {
     // Build-only = has a build context and no runnable registry image.
     const isBuild = Boolean(s.build) && !s.image;
+    const isProxy = Boolean(s.proxyKind);
     const volumes = s.volumes
       .filter((v) => v.type === "volume" && v.source)
       .map((v) => ({ name: v.source as string, target: v.target }));
@@ -94,7 +106,11 @@ export async function buildMigrationPreview(opts: {
       blocked: isBuild,
       reason: isBuild
         ? "Built-from-source services can't be migrated yet — publish an image or link a repo first."
-        : undefined,
+        : isProxy
+          ? `Reverse proxy (${s.proxyKind}) on ${(s.edgePorts ?? []).map((p) => `:${p}`).join("/")} — Openship's edge replaces it; not imported.`
+          : undefined,
+      edgeProxy: isProxy || undefined,
+      edgePortsReserved: !isProxy && s.edgePorts?.length ? s.edgePorts : undefined,
       volumes,
       bindMounts: bindAll.filter(isMovableBind),
       bindMountsSkipped: bindAll.filter((p) => !isMovableBind(p)),
@@ -102,16 +118,20 @@ export async function buildMigrationPreview(opts: {
     };
   });
 
+  // Proxies are dropped, not migrated — exclude them from the moved-volume set.
+  const workloads = services.filter((s) => !s.edgeProxy);
+  const droppedProxies = services.filter((s) => s.edgeProxy).map((s) => s.name);
   const volumesToMove = sameServer
     ? []
-    : Array.from(new Set(services.flatMap((s) => s.volumes.map((v) => v.name))));
+    : Array.from(new Set(workloads.flatMap((s) => s.volumes.map((v) => v.name))));
 
   return {
     sameServer,
     services,
     volumesToMove,
-    hasBlocked: services.some((s) => s.blocked),
-    downtimeWarning: services.length > 0,
+    hasBlocked: workloads.some((s) => s.blocked),
+    downtimeWarning: workloads.length > 0,
+    droppedProxies,
     warnings: stack.warnings,
   };
 }

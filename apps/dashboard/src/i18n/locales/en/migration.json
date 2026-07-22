@@ -1,6 +1,6 @@
 {
   "wizard": {
-    "title": "Migrate a Docker deployment",
+    "title": "Migrate apps",
     "intro": "Inspect this server's Docker and adopt its containers as an Openship project. Inspection is read-only — nothing changes on the server until you deploy.",
     "selectServer": "Select a server",
     "scan": "Inspect Docker",
@@ -20,6 +20,7 @@
     "removeProject": "Remove project",
     "targetLabel": "Target server",
     "sameServer": "Same server (reuse volumes in place)",
+    "crossServerBuiltSoon": "Locally-built images can't move across servers yet (coming soon). Migrate those in place — pick the same server as the target. Registry images cross fine.",
     "killOriginals": "Stop & remove old containers once the new deployment is verified",
     "transfer": {
       "label": "Transfer",
@@ -45,6 +46,8 @@
     "failed": "Migration failed",
     "rolled_back": "Rolled back — your original containers were restarted",
     "openProject": "Open project",
+    "addDomains": "Add domains",
+    "routeHint": "Your services are imported but not public yet. Add a domain per service on the Domains tab — Openship deploys automatically to install its edge (OpenResty) and, if your old proxy still holds 80/443, offers to take it over.",
     "downtimeNote": "Original containers are stopped during the move; expect brief downtime until the new deployment is live."
   },
   "cutover": {
@@ -56,6 +59,8 @@
   },
   "discover": {
     "buildBlocked": "Built from source — can't migrate yet (publish an image first)",
+    "proxyExcluded": "Reverse proxy ({ports}) — not imported; Openship’s edge replaces it.",
+    "edgePortReserved": "Ports {ports} reserved for Openship’s edge; not published.",
     "nothing": "No adoptable Docker containers were found on this server.",
     "servicesTitle": "Services",
     "volumesTitle": "Volumes",
@@ -93,7 +98,7 @@
   "entry": {
     "cardTitle": "Existing Docker server",
     "cardDesc": "Migrate a running Docker or Compose deployment into Openship.",
-    "action": "Migrate Docker",
+    "action": "Migrate apps",
     "tab": "Existing server",
     "comingSoon": "Docker migration is coming soon"
   }

@@ -47,9 +47,12 @@ interface Props {
   /** On the Apps page: show the catalog app's brand logo instead of the
    *  framework/service fallback icon. */
   preferAppLogo?: boolean;
+  /** Show an "update available" badge (fed by the update scan). Off by default
+   *  so the Projects page is unaffected. */
+  updateAvailable?: boolean;
 }
 
-const ProjectCard: React.FC<Props> = ({ project, preferAppLogo }) => {
+const ProjectCard: React.FC<Props> = ({ project, preferAppLogo, updateAvailable }) => {
   const router = useRouter();
   const { t } = useI18n();
   const { baseDomain } = usePlatform();
@@ -103,6 +106,11 @@ const ProjectCard: React.FC<Props> = ({ project, preferAppLogo }) => {
               title={interpolate(t.projects.card.liveVersion, { version: String(project.activeVersion) })}
             >
               v{project.activeVersion}
+            </span>
+          )}
+          {updateAvailable && (
+            <span className="shrink-0 rounded-md bg-warning-bg px-1.5 py-0.5 text-[10px] font-medium text-warning">
+              {t.projects.card.updateAvailable}
             </span>
           )}
         </div>

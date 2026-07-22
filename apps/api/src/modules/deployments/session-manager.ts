@@ -32,6 +32,10 @@ export interface BuildSessionState {
   errorMessage?: string;
   /** Per-service deployment statuses (compose projects only, for replay on reconnect) */
   serviceStatuses: Map<string, ServiceStatusPayload>;
+  /** The prompt currently awaiting a user decision (e.g. edge 80/443 takeover,
+   *  port conflict). Held here — not just broadcast — so a page refresh /
+   *  reconnect re-shows it (replayed in subscribe). Cleared on response/timeout. */
+  currentPrompt?: PromptPayload;
   /** SSE writer callbacks for active subscribers */
   subscribers: Set<SseWriter>;
   startedAt: number;
@@ -42,6 +46,16 @@ export interface BuildSessionState {
 }
 
 export type SseWriter = (event: string, data: string) => boolean;
+
+/** A user-decision prompt (edge takeover, port conflict, …). Mirrors the SSE
+ *  "prompt" payload the dashboard renders as a modal. */
+export interface PromptPayload {
+  promptId: string;
+  title: string;
+  message: string;
+  actions: Array<{ id: string; label: string; variant?: string }>;
+  details?: Record<string, unknown>;
+}
 
 
 /** Convert a LogEntry into the JSON payload the frontend expects. The event id
@@ -309,6 +323,13 @@ export function subscribe(
     }));
   }
 
+  // Re-show a still-pending decision prompt (edge takeover, port conflict) so a
+  // refresh/reconnect lands back on the modal instead of a silent stalled build.
+  // Only for a live session — a finished build's prompt is stale.
+  if (session.currentPrompt && !["ready", "failed", "cancelled"].includes(session.status)) {
+    writer("prompt", JSON.stringify({ type: "prompt", ...session.currentPrompt }));
+  }
+
   // If session already finished, send typed completion + end events
   if (["ready", "failed", "cancelled"].includes(session.status)) {
     if (session.status === "ready") {
@@ -374,18 +395,14 @@ const PROMPT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
  */
 export async function promptUser(
   sessionId: string,
-  prompt: {
-    promptId: string;
-    title: string;
-    message: string;
-    actions: Array<{ id: string; label: string; variant?: string }>;
-    details?: Record<string, unknown>;
-  },
+  prompt: PromptPayload,
 ): Promise<string> {
   const session = sessions.get(sessionId);
   if (!session) throw new Error("No active session for prompt");
 
-  // Broadcast prompt to all subscribers
+  // Hold the prompt on the session so a refresh/reconnect re-shows it (replayed
+  // in subscribe), not just a one-shot broadcast.
+  session.currentPrompt = prompt;
   const payload = JSON.stringify({ type: "prompt", ...prompt });
   for (const writer of session.subscribers) {
     writer("prompt", payload);
@@ -395,6 +412,7 @@ export async function promptUser(
   return new Promise<string>((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       pendingPrompts.delete(sessionId);
+      if (session.currentPrompt?.promptId === prompt.promptId) session.currentPrompt = undefined;
       reject(new Error("Prompt timed out - no response from user"));
     }, PROMPT_TIMEOUT_MS);
 
@@ -412,6 +430,8 @@ export function respondToPrompt(sessionId: string, action: string): boolean {
 
   clearTimeout(pending.timeoutId);
   pendingPrompts.delete(sessionId);
+  const session = sessions.get(sessionId);
+  if (session) session.currentPrompt = undefined;
   pending.resolve(action);
   return true;
 }
@@ -423,5 +443,7 @@ function rejectPendingPrompt(sessionId: string, reason: string): void {
 
   clearTimeout(pending.timeoutId);
   pendingPrompts.delete(sessionId);
+  const session = sessions.get(sessionId);
+  if (session) session.currentPrompt = undefined;
   pending.reject(new Error(reason));
 }

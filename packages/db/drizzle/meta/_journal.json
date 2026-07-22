@@ -351,6 +351,48 @@
       "when": 1784563956184,
       "tag": "0049_nappy_piledriver",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1784622078459,
+      "tag": "0050_add_service_deployment_image_digest",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1784623222587,
+      "tag": "0051_add_update_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1784623925198,
+      "tag": "0052_add_notice_target",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1784648493089,
+      "tag": "0053_colossal_sandman",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1784665472113,
+      "tag": "0054_add_instance_smtp",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1784687866083,
+      "tag": "0055_rainy_klaw",
+      "breakpoints": true
     }
   ]
 }

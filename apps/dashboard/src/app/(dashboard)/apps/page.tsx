@@ -6,8 +6,10 @@ import { useRouter } from "next/navigation";
 import { Project } from "@/constants/mock";
 import ProjectCard from "../projects/components/ProjectCard";
 import { projectsApi } from "@/lib/api";
+import { updatesApi } from "@/lib/api/updates";
 import { useI18n, interpolate } from "@/components/i18n-provider";
-import { Plus, Database, Workflow, FileText, Activity, KeyRound, BarChart3, ArrowRight, type LucideIcon } from "lucide-react";
+import { AVAILABLE_APP_IDS } from "@repo/core";
+import { Plus, Mail, Database, Workflow, FileText, Activity, KeyRound, BarChart3, ArrowRight, type LucideIcon } from "lucide-react";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { AppLogo } from "@/components/AppLogo";
 
@@ -27,7 +29,10 @@ interface FeaturedApp {
   icon: LucideIcon;
 }
 
+// Enabled apps (mail / n8n / convex) lead; the rest render dimmed "coming soon"
+// (single source: AVAILABLE_APP_IDS in @repo/core).
 const FEATURED_APPS: FeaturedApp[] = [
+  { id: "mail", name: "Openship Mail", desc: "Self-hosted mail server + webmail", icon: Mail },
   { id: "convex", name: "Convex", desc: "Reactive backend & database", icon: Database },
   { id: "n8n", name: "n8n", desc: "Workflow automation", icon: Workflow },
   { id: "ghost", name: "Ghost", desc: "Publishing & newsletters", icon: FileText },
@@ -36,11 +41,15 @@ const FEATURED_APPS: FeaturedApp[] = [
   { id: "metabase", name: "Metabase", desc: "BI & dashboards", icon: BarChart3 },
 ];
 
+/** Installable this version? Drives the dimmed "coming soon" treatment. */
+const isAppEnabled = (id: string) => AVAILABLE_APP_IDS.has(id);
+
 export default function AppsPage() {
   const { t } = useI18n();
   const router = useRouter();
   const ap = t.dashboard.pages.apps;
   const [projects, setProjects] = useState<Project[]>([]);
+  const [updatesBehind, setUpdatesBehind] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const isLoadingRef = useRef(false);
 
@@ -60,6 +69,12 @@ export default function AppsPage() {
       }
     };
     load();
+    // Which installed apps have a pending update (fed by the update scan). Best-
+    // effort — a failure just hides the badge.
+    updatesApi
+      .list(true)
+      .then((res) => setUpdatesBehind(new Set(res.data.map((u) => u.projectId))))
+      .catch(() => {});
     return () => {
       isLoadingRef.current = false;
     };
@@ -147,12 +162,20 @@ export default function AppsPage() {
           <div className="mx-auto mt-10 max-w-2xl">
             <p className="mb-4 text-xs uppercase tracking-wider text-muted-foreground/60">{ap.popular}</p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {FEATURED_APPS.map((a) => (
+              {FEATURED_APPS.map((a) => {
+                const enabled = isAppEnabled(a.id);
+                return (
                 <button
                   key={a.id}
                   type="button"
-                  onClick={() => router.push(`/apps/new?app=${a.id}`)}
-                  className="group flex items-center gap-3 rounded-xl border border-border/50 bg-card p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+                  disabled={!enabled}
+                  aria-disabled={!enabled}
+                  onClick={() => enabled && router.push(`/apps/new/${a.id}`)}
+                  className={`group flex items-center gap-3 rounded-xl border border-border/50 bg-card p-4 text-left transition-all ${
+                    enabled
+                      ? "hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+                      : "cursor-not-allowed opacity-45 saturate-50"
+                  }`}
                 >
                   <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/60">
                     <AppLogo appId={a.id} icon={a.icon} className="size-5" />
@@ -161,9 +184,16 @@ export default function AppsPage() {
                     <p className="text-sm font-medium text-foreground">{a.name}</p>
                     <p className="truncate text-xs text-muted-foreground">{a.desc}</p>
                   </div>
-                  <ArrowRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-foreground" />
+                  {enabled ? (
+                    <ArrowRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-foreground" />
+                  ) : (
+                    <span className="shrink-0 rounded-full border border-border/60 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      {ap.comingSoon}
+                    </span>
+                  )}
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -173,7 +203,12 @@ export default function AppsPage() {
           <div className="min-w-0">
             <div className="bg-card rounded-2xl border border-border/50 divide-y divide-border/50">
               {apps.map((app) => (
-                <ProjectCard key={app.id} project={app} preferAppLogo />
+                <ProjectCard
+                  key={app.id}
+                  project={app}
+                  preferAppLogo
+                  updateAvailable={updatesBehind.has(app.id)}
+                />
               ))}
             </div>
           </div>
@@ -187,12 +222,20 @@ export default function AppsPage() {
                 <div className="bg-card rounded-2xl border border-border/50 p-5">
                   <p className="mb-4 text-xs uppercase tracking-wider text-muted-foreground/60">{ap.alsoDeploy}</p>
                   <div className="space-y-2">
-                    {suggestions.map((a) => (
+                    {suggestions.map((a) => {
+                      const enabled = isAppEnabled(a.id);
+                      return (
                       <button
                         key={a.id}
                         type="button"
-                        onClick={() => router.push(`/apps/new?app=${a.id}`)}
-                        className="group flex w-full items-center gap-3 rounded-xl border border-border/50 p-3 text-left transition-all hover:border-primary/40 hover:bg-muted/30"
+                        disabled={!enabled}
+                        aria-disabled={!enabled}
+                        onClick={() => enabled && router.push(`/apps/new/${a.id}`)}
+                        className={`group flex w-full items-center gap-3 rounded-xl border border-border/50 p-3 text-left transition-all ${
+                          enabled
+                            ? "hover:border-primary/40 hover:bg-muted/30"
+                            : "cursor-not-allowed opacity-45 saturate-50"
+                        }`}
                       >
                         <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60">
                           <AppLogo appId={a.id} icon={a.icon} className="size-[18px]" />
@@ -201,9 +244,16 @@ export default function AppsPage() {
                           <p className="text-[13px] font-medium text-foreground">{a.name}</p>
                           <p className="truncate text-[11px] text-muted-foreground">{a.desc}</p>
                         </div>
-                        <ArrowRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-foreground rtl:rotate-180" />
+                        {enabled ? (
+                          <ArrowRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-foreground rtl:rotate-180" />
+                        ) : (
+                          <span className="shrink-0 rounded-full border border-border/60 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                            {ap.comingSoon}
+                          </span>
+                        )}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                   <Link
                     href="/apps/new"

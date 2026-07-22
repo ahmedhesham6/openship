@@ -1,3 +1,4 @@
+import "./_env"; // set INTERNAL_TOKEN etc. before job-command → encryption → config/env loads
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // Shared mutable state for the mocks (hoisted so the factories can close over it).
@@ -96,7 +97,7 @@ describe("custom job executor (runCommandJobTick)", () => {
     const f = h.finishCalls[0];
     expect(f.status).toBe("success");
     expect(f.output).toBe("hi\n");
-    expect(f.summary).toEqual({ exitCode: 0 });
+    expect(f.summary).toMatchObject({ exitCode: 0, attempts: 1 });
     expect(f.error).toBeUndefined();
     // connection retained + released exactly once (no leak)
     expect(h.retain).toBe(1);
@@ -155,7 +156,7 @@ describe("custom job executor (runCommandJobTick)", () => {
     expect(h.startedRuns).toHaveLength(0);
   });
 
-  it("retries a failing attempt up to maxAttempts (one run row per attempt)", async () => {
+  it("retries a failing attempt into ONE aggregate run row (fix #2)", async () => {
     h.jobRows["custom:retry"] = cmdJob("custom:retry", {
       serverId: "srv1",
       command: "flaky",
@@ -166,11 +167,20 @@ describe("custom job executor (runCommandJobTick)", () => {
 
     await runCommandJobTick("custom:retry");
 
-    expect(h.finishCalls).toHaveLength(2); // one job_run row per attempt
-    expect(h.finishCalls[0].status).toBe("failed");
-    expect(h.finishCalls[1].status).toBe("success");
-    expect(h.retain).toBe(2); // retained + released per attempt (no leak)
+    // Retries aggregate: the row is finished ONCE with the final status, the
+    // attempt count in summary, and both attempts' output — so run-now's id +
+    // SSE stream span every attempt (fix #2).
+    expect(h.finishCalls).toHaveLength(1);
+    const f = h.finishCalls[0];
+    expect(f.status).toBe("success");
+    expect((f.summary as { attempts: number }).attempts).toBe(2);
+    expect(String(f.output)).toContain("boom");
+    expect(String(f.output)).toContain("ok");
+    // still one SSH connection retained+released per attempt (no leak)
+    expect(h.retain).toBe(2);
     expect(h.release).toBe(2);
+    // only one run row was ever opened (the aggregate)
+    expect(h.startedRuns).toHaveLength(1);
   });
 
   it("stops retrying after a success (no wasted attempts)", async () => {

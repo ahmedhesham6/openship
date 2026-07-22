@@ -55,7 +55,9 @@
     "online": "オンライン",
     "offline": "オフライン",
     "authKey": "鍵",
-    "authPassword": "パスワード"
+    "authPassword": "パスワード",
+    "projects": "プロジェクト",
+    "regions": "リージョン"
   },
   "form": {
     "sshConnection": "SSH 接続",

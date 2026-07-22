@@ -8,11 +8,13 @@ export { resourceGrant } from "./resource-grant";
 export { invitationPendingGrant } from "./invitation-pending-grant";
 export { gitInstallation } from "./github";
 export { githubInstallState } from "./github-install-state";
-export { projectApp, project, envVar } from "./project";
+export { projectGroup, project, envVar } from "./project";
 export { deployment, buildSession } from "./deployment";
 export { domain } from "./domain";
 export { routeRule } from "./route-rule";
 export { systemNotice } from "./system-notice";
+export { updateStatus } from "./update-status";
+export { serverModuleStatus } from "./server-module-status";
 export { cloudWebhookBinding } from "./cloud-webhook-binding";
 export { githubWebhookEvent } from "./github-webhook-event";
 export { service, serviceDeployment } from "./service";
@@ -50,4 +52,5 @@ export {
   oblienWebhookEvent,
   stripeTopupGrant,
   billingAnniversaryGrant,
+  billingUsageSnapshot,
 } from "./billing";

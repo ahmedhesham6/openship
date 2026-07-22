@@ -14,6 +14,7 @@ import { getRequestContext } from "../../lib/request-context";
 import { permission } from "../../lib/permission";
 import { isServerInOrg, param } from "../../lib/controller-helpers";
 import { streamRunSSE } from "../../lib/run-sse";
+import { streamSSE } from "../../lib/sse";
 import { discoverServerStack } from "./docker-inspect.service";
 import { adoptServerStack } from "./migrate.service";
 import { buildMigrationPreview } from "./migration-preflight";
@@ -86,6 +87,41 @@ export async function scanServer(c: Context) {
   } catch (err) {
     return c.json({ error: `Scan failed: ${safeErrorMessage(err)}` }, 502);
   }
+}
+
+/**
+ * GET /migration/scan/stream?serverId=…  (SSE)
+ *
+ * Streaming variant of `scanServer`: SSH + `docker inspect` across a server's
+ * containers is slow and variable, so a plain request races the client's fixed
+ * timeout (worse through the same-origin proxy's extra hop). Streaming it —
+ * step progress events + a `result` frame — removes the arbitrary timeout
+ * entirely (streamSSE keeps the connection alive with heartbeats) and shows the
+ * user what's happening. Emits `{type:"progress"|"result"|"error", …}` frames.
+ */
+export async function scanServerStream(c: Context) {
+  const serverId = c.req.query("serverId");
+  if (!serverId) return c.json({ error: "serverId is required" }, 400);
+
+  const ctx = getRequestContext(c);
+  await permission.assert(ctx, { resourceType: "server", resourceId: serverId, action: "write" });
+  if (!(await isServerInOrg(ctx, serverId))) {
+    return c.json({ error: "Server not found" }, 404);
+  }
+
+  return streamSSE(c, async (s) => {
+    try {
+      const stack = await discoverServerStack(serverId, ctx.organizationId, (message) => {
+        void s.writeSSE({ event: "progress", data: JSON.stringify({ type: "progress", message }) });
+      });
+      await s.writeSSE({ event: "result", data: JSON.stringify({ type: "result", stack }) });
+    } catch (err) {
+      await s.writeSSE({
+        event: "error",
+        data: JSON.stringify({ type: "error", error: `Scan failed: ${safeErrorMessage(err)}` }),
+      });
+    }
+  });
 }
 
 /**

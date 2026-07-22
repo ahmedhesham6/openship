@@ -190,8 +190,6 @@ function BalanceHero({ state }: { state: BillingState }) {
   const { quotaLimit, quotaUsed, quotaRemaining } = state.balance;
   const pct = pctUsed(quotaUsed, quotaLimit);
   const days = daysUntil(state.currentPeriod.end);
-  const plan = PLANS[state.tier];
-  const planName = plan?.name ?? state.tier;
   const ringTone = ringStrokeClass(pct);
 
   return (
@@ -209,17 +207,8 @@ function BalanceHero({ state }: { state: BillingState }) {
           </RingGauge>
         </div>
 
-        {/* Summary */}
+        {/* Usage metrics (plan identity lives in PlanCard above) */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-semibold text-foreground">{interpolate(t.billing.overview.planLabel, { name: planName })}</h2>
-            <span
-              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize ${statusPillClass(state.status)}`}
-            >
-              {state.status.replace(/_/g, " ")}
-            </span>
-          </div>
-
           <div className="grid grid-cols-2 gap-4 sm:max-w-md">
             <div>
               <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -246,20 +235,6 @@ function BalanceHero({ state }: { state: BillingState }) {
               </p>
             </div>
           </div>
-
-          {state.tier === "free" && (
-            <Link
-              href="/billing/plans"
-              className="relative inline-flex w-fit items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-medium text-primary-foreground"
-            >
-              <span className="pointer-events-none absolute -inset-[1px] rounded-xl bg-gradient-to-r from-primary via-blue-500 to-violet-500 opacity-40 blur-[1px] transition-opacity hover:opacity-60" />
-              <span className="absolute inset-0 rounded-xl bg-gradient-to-r from-primary to-primary/90" />
-              <span className="relative flex items-center gap-1.5">
-                <Sparkles className="size-3.5" />
-                {t.billing.overview.upgradeToPro}
-              </span>
-            </Link>
-          )}
         </div>
       </div>
     </div>
@@ -468,12 +443,95 @@ function BuyCreditsCard() {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Plan card — the primary surface (subscription first)               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Subscription-first lead card: the tier the org is on, its status, the
+ * included monthly credit (CPU-time) allowance + feature chips, and the
+ * upgrade / manage entry point. Credits balance is the secondary card below —
+ * general credits exist but aren't the first thing the user sees.
+ */
+function PlanCard({ state }: { state: BillingState }) {
+  const { t } = useI18n();
+  const plan = PLANS[state.tier];
+  const planName = plan?.name ?? state.tier;
+  const isFree = state.tier === "free";
+  const allowance = state.monthlyCreditLimit;
+  const features = plan?.features ?? [];
+
+  return (
+    <div className="rounded-2xl border border-border/50 bg-card p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold text-foreground">
+              {interpolate(t.billing.overview.planLabel, { name: planName })}
+            </h2>
+            <span
+              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize ${statusPillClass(state.status)}`}
+            >
+              {state.status.replace(/_/g, " ")}
+            </span>
+          </div>
+          {plan?.description && (
+            <p className="mt-1 text-sm text-muted-foreground">{plan.description}</p>
+          )}
+        </div>
+
+        {isFree ? (
+          <Link
+            href="/billing/plans"
+            className="relative inline-flex w-fit items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-medium text-primary-foreground"
+          >
+            <span className="pointer-events-none absolute -inset-[1px] rounded-xl bg-gradient-to-r from-primary via-blue-500 to-violet-500 opacity-40 blur-[1px] transition-opacity hover:opacity-60" />
+            <span className="absolute inset-0 rounded-xl bg-gradient-to-r from-primary to-primary/90" />
+            <span className="relative flex items-center gap-1.5">
+              <Sparkles className="size-3.5" />
+              {t.billing.overview.upgradeToPro}
+            </span>
+          </Link>
+        ) : (
+          <Link
+            href="/billing/plans"
+            className="inline-flex items-center gap-1 rounded-lg border border-border/60 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted/40"
+          >
+            {t.billing.tabs.plans}
+            <ArrowUpRight className="size-3" />
+          </Link>
+        )}
+      </div>
+
+      {(allowance != null || features.length > 0) && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {allowance != null && (
+            <span className="inline-flex items-center rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+              {interpolate(t.billing.overview.creditsAmount, { n: formatCredits(allowance) })}
+            </span>
+          )}
+          {features.map((f) => (
+            <span
+              key={f}
+              className="inline-flex items-center rounded-lg bg-muted px-2.5 py-1 text-xs text-muted-foreground"
+            >
+              {f}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Component                                                         */
 /* ------------------------------------------------------------------ */
 
 export const BillingOverview: React.FC<BillingOverviewProps> = ({ state }) => {
   return (
     <div className="flex flex-col gap-5">
+      {/* Subscription/tier leads; credits balance is secondary. */}
+      <PlanCard state={state} />
       <BalanceHero state={state} />
       <RecentActivityCard />
       <BuyCreditsCard />

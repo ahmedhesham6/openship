@@ -14,7 +14,7 @@ import {
   resolveReleaseDist,
   resolveReleaseDistOrNull,
   type ReleaseDistSpec,
-} from "../../../lib/release-dist";
+} from "../../../lib/release-resolver";
 
 const OPENSHIP_SOURCE: ReleaseSource = {
   mode: "github",

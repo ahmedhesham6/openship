@@ -13,6 +13,7 @@ import {
   defaultLocale,
   isRtl,
   loadDictionary,
+  LOCALE_COOKIE,
   locales,
   type Dictionary,
   type Locale,
@@ -34,8 +35,6 @@ const I18nContext = createContext<I18nContextValue | null>(null);
 /* ------------------------------------------------------------------ */
 /*  Provider                                                           */
 /* ------------------------------------------------------------------ */
-
-export const LOCALE_COOKIE = "openship-locale";
 
 /** Read the chosen locale on the client: cookie first (what SSR also reads),
  *  then the localStorage mirror. Returns null when nothing valid is stored. */

@@ -137,6 +137,7 @@ export type {
 } from "./system/types";
 export type { ImportedSite, ProxyScanResult } from "./system/types";
 export {
+  classifyProxy,
   EdgeConflictError,
   EdgeMigrateRequested,
   freeEdgeTargets,
@@ -164,6 +165,23 @@ export type {
 } from "./system/environment";
 export { resolveEnvironment } from "./system/environment";
 export { systemCatalog } from "./system/catalog";
+// Native-module versioning + migration framework (verify → reconcile).
+export {
+  resolveVerifiedCatalog,
+  loadEmbeddedCatalog,
+  fetchRemoteCatalog,
+  reconcileServerModule,
+  readManifest,
+  readManifestOrSeed,
+  manifestPath,
+  MODULES_STATE_DIR,
+  type VerifiedCatalog,
+  type ModuleCatalog,
+  type ReconcileResult,
+  type ReconcileOptions,
+  type PendingConsent,
+  type OnBoxManifest,
+} from "./system/modules";
 export { SYSTEM_COMPONENTS, getSystemComponentDefinition } from "./system/components";
 export {
   isRemoteConnectionError,

@@ -4,6 +4,7 @@ import React from "react";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { DeploymentsContent } from "@/app/(dashboard)/deployments/components";
 import { deployApi, projectsApi, isAbortError, getApiErrorMessage } from "@/lib/api";
+import { openTriggeredBuild } from "@/lib/deploy-nav";
 import { type Service } from "@/lib/api/services";
 import { useModal } from "@/context/ModalContext";
 import { useToast } from "@/context/ToastContext";
@@ -23,6 +24,9 @@ export const Deployments = () => {
 
   const [isRedeploying, setIsRedeploying] = React.useState(false);
   const [isRetryingRoute, setIsRetryingRoute] = React.useState(false);
+  // The Openship control-plane self-app has no deployable source and updates
+  // itself via the CLI — redeploy/self-update controls would only 403, so hide them.
+  const isSelfApp = projectData?.appTemplateId === "openship";
 
   /** Re-run just the free .opsh.io edge-route sync (no rebuild). On success the
    *  routing warning clears and the project flips back to Live; on failure the
@@ -64,6 +68,8 @@ export const Deployments = () => {
 
   React.useEffect(() => {
     if (!projectData?.id) return;
+    // The self-app updates via the CLI — no drift banner, so skip the fetch.
+    if (isSelfApp) return;
     let cancelled = false;
     projectsApi
       .getCommitStatus(projectData.id)
@@ -92,7 +98,7 @@ export const Deployments = () => {
       cancelled = true;
     };
     // activeDeploymentId dep → refetch after a deploy advances the live release.
-  }, [projectData?.id, projectData?.activeDeploymentId]);
+  }, [projectData?.id, projectData?.activeDeploymentId, isSelfApp]);
 
   /**
    * Redeploy = take the project's CURRENT saved configuration + env vars, pull
@@ -115,8 +121,7 @@ export const Deployments = () => {
             ? { projectId: projectData.id, refresh: true }
             : { projectId: projectData.id, smartRoute: true };
       const res = await deployApi.trigger(body);
-      const newId = res?.data?.deployment?.id;
-      router.push(newId ? `/build/${newId}` : `/projects/${projectData.id}/deployments`);
+      openTriggeredBuild(router, res, projectData.id);
     } catch (error) {
       // A timeout almost certainly means the server started the deploy but was
       // slow to return the id — show the deployments list so it's visible rather
@@ -259,7 +264,7 @@ export const Deployments = () => {
 
       {/* "Project outdated" nudge — only when the deployed commit is behind the
           branch HEAD. Redeploy uses the same direct path as the button below. */}
-      {commitStatus?.behind && commitStatus.mode === "commit" && (
+      {!isSelfApp && commitStatus?.behind && commitStatus.mode === "commit" && (
         <WarningCallout
           title={t.projects.redeploy.newCommitTitle}
           description={
@@ -297,7 +302,7 @@ export const Deployments = () => {
 
       {/* Release/dist source: a newer version is available. Same direct deploy
           path — triggerDeployment re-resolves the newest version server-side. */}
-      {commitStatus?.behind && commitStatus.mode === "release" && (
+      {!isSelfApp && commitStatus?.behind && commitStatus.mode === "release" && (
         <WarningCallout
           title={t.projects.redeploy.newVersionTitle}
           description={
@@ -332,6 +337,7 @@ export const Deployments = () => {
         />
       )}
 
+      {!isSelfApp && (
       <div className="bg-card rounded-2xl border border-border/50 p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
@@ -385,6 +391,7 @@ export const Deployments = () => {
           </div>
         </div>
       </div>
+      )}
 
       <DeploymentsContent projectId={id} projectName={projectData.name} hideHeader hideSidebar />
     </div>

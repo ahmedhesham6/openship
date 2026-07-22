@@ -20,6 +20,8 @@ r.use("*", localOnly);
 
 // Read-only: inspect a server's Docker and return the adoptable stack.
 r.post("/scan", { tag: "server:write", collection: true }, migration.scanServer);
+// Streaming variant (SSE): step progress + result, no fixed timeout.
+r.get("/scan/stream", { tag: "server:write", collection: true }, migration.scanServerStream);
 // Create an Openship project from the selected discovered services (records only).
 r.post("/adopt", { tag: "server:write", collection: true }, migration.adoptServer);
 

@@ -238,6 +238,9 @@ function createServiceRuntimeConfig(opts: {
     namespaceVolumes: service.namespaceVolumes,
     command: runtimeCommand,
     restart: service.restart ?? "unless-stopped",
+    // "update" trigger → force a fresh pull so a moved mutable tag (:latest/:1)
+    // actually rolls forward. Every other trigger stays pull-if-missing.
+    forcePull: dep.trigger === "update",
     advanced: service.advanced ?? undefined,
     resources,
     expose: service.exposed,
@@ -489,6 +492,7 @@ export async function deployComposeServices(
       .map((m) => m.serviceId as string),
   );
   const isExternalUnchanged = (svc: Service): boolean => {
+    if (dep.trigger === "update") return false; // update = force re-pull + recreate every image service
     if (opts?.targetServiceIds) return false; // smart subset already carries non-targets forward
     if (!carryAnchor) return false; // never deployed → deploy it
     if (svc.build || !svc.image) return false; // must be image-only (external); buildables always rebuild
@@ -923,6 +927,7 @@ export async function deployComposeServices(
           containerId: result.containerId,
           status: "success",
           imageRef: image,
+          imageDigest: result.imageDigest ?? null,
           hostPort: result.hostPort ?? null,
           ip: result.ip ?? null,
         });
@@ -933,6 +938,7 @@ export async function deployComposeServices(
           containerId: result.containerId,
           status: "success",
           imageRef: image,
+          imageDigest: result.imageDigest ?? null,
           hostPort: result.hostPort ?? null,
           ip: result.ip ?? null,
         });

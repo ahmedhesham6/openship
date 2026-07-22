@@ -48,6 +48,10 @@ export interface ComponentStatus {
   removeBlockedReason?: string;
   installed: boolean;
   version?: string;
+  /** Newer version available from the package manager (candidate), if any. */
+  availableVersion?: string;
+  /** True when `availableVersion` is newer than the installed `version`. */
+  updateAvailable?: boolean;
   /** Whether the daemon is actively running (Docker, Nginx) */
   running?: boolean;
   /** installed AND running (when applicable) */

@@ -10,6 +10,7 @@ import React, {
   useMemo,
 } from "react";
 import { isServicesFramework } from "@repo/core";
+import { isSchemaAppTemplate } from "@/components/app-settings/AppSettingsForm";
 import { useRouter } from "next/navigation";
 import { useI18n } from "@/components/i18n-provider";
 import { projectsApi, servicesApi, type Service } from "@/lib/api";
@@ -95,6 +96,10 @@ interface ProjectEnvironment {
   activeDeploymentId: string | null;
   latestDeploymentStatus: string | null;
   primaryDomain: string | null;
+  // App axis: version instead of git branch (null for git projects).
+  version?: string | null;
+  isApp?: boolean;
+  gitProvider?: string | null;
 }
 
 interface BuildData {
@@ -814,6 +819,9 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
   // — a single/static app that had a sidecar service added is still an app and
   // KEEPS its Configuration tab. Only a genuine compose project drops it.
   const isServicesProject = isServicesFramework(projectData.framework);
+  // A schema app keeps its Configuration tab even when it's a compose/services
+  // project — that tab hosts the "App settings | Deployment" 2-mode surface.
+  const isSchemaApp = !!projectData.isApp && isSchemaAppTemplate(projectData.appTemplateId);
   const tabs = useMemo(() => {
     const tl = t.projects.sidebar.tabs;
     const all = [
@@ -827,10 +835,14 @@ export const ProjectSettingsProvider: React.FC<ProviderProps> = ({
       { id: "backup", label: tl.backup, icon: "database.png" },
       { id: "advanced", label: tl.advanced, icon: "error%20triangle-81-1658234612.png" },
     ];
-    // A service-first project has no single-app runtime — config lives per
-    // service under Services — so hide the Configuration (runtime) tab there.
-    return isServicesProject ? all.filter((tab) => tab.id !== "runtime") : all;
-  }, [t, isServicesProject]);
+    return all.filter((tab) => {
+      // A service-first project has no single-app runtime — config lives per
+      // service under Services — so hide the Configuration (runtime) tab there.
+      // A schema app keeps it, though: it's the home of the 2-mode config.
+      if (isServicesProject && !isSchemaApp && tab.id === "runtime") return false;
+      return true;
+    });
+  }, [t, isServicesProject, isSchemaApp]);
 
   const defaultTab = tabs[0].id;
   const [activeTab, setActiveTab] = useState(resolveTab(slug?.[0]) || defaultTab);

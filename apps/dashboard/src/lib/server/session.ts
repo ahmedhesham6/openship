@@ -40,6 +40,33 @@ export type User = {
 export type SessionData = { session: Session; user: User };
 
 /**
+ * True when a logged-in user must pick an org before they can land on "/": no
+ * active org resolved AND 2+ memberships. The (dashboard) layout redirects such
+ * users to /select-organization; the (auth) layout (which hosts that page) uses
+ * this SAME check to avoid bouncing them straight back to "/" — otherwise the
+ * two layouts ping-pong forever (the infinite redirect).
+ */
+export async function needsOrgSelection(
+  activeOrganizationId: string | null | undefined,
+): Promise<boolean> {
+  try {
+    const res = await serverApi.get<{ data?: { id: string }[] } | { id: string }[] | null>(
+      "auth/organization/list",
+      { cache: "no-store" },
+    );
+    const orgs = !res ? [] : Array.isArray(res) ? res : res.data ?? [];
+    // Trust the active org only if it's an ACTUAL membership. A stale/foreign
+    // active org (e.g. the zero-auth Local User's workspace carried over after
+    // cloud-connect) must NOT count as resolved — otherwise the two layouts
+    // disagree and loop, and the UI scopes to an org the user isn't in.
+    if (activeOrganizationId && orgs.some((o) => o.id === activeOrganizationId)) return false;
+    return orgs.length >= 2;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get the current session from the API.
  *
  * Wrapped with `React.cache()` so multiple server components

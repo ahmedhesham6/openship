@@ -1,6 +1,6 @@
 {
   "name": "openship",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Openship CLI - deploy, manage, and open your Openship platform from the terminal",
   "license": "Apache-2.0",
   "repository": {
@@ -26,7 +26,7 @@
   "scripts": {
     "build": "tsup && bun run build/stage-server.ts",
     "cli": "bun dist/index.js",
-    "dev": "bun run build && bun dist/index.js",
+    "dev": "bun run build && bun run build/stage-dashboard.ts && OPENSHIP_DASHBOARD_DIR=\"$(cd ../dashboard/.next/standalone && pwd)\" bun dist/index.js",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist .turbo node_modules"
   },

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -20,8 +21,10 @@ import {
 } from "lucide-react";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { RoutingConfigCard } from "./RoutingConfigCard";
+import { RouteRules } from "./RouteRules";
 import { invalidateProjectCaches } from "@/hooks/useProjectEndpoints";
 import { getApiErrorMessage, projectsApi, deployApi, domainsApi, serviceKind, servicesApi, type Service, type ServiceInput } from "@/lib/api";
+import { openTriggeredBuild } from "@/lib/deploy-nav";
 import { useToast } from "@/context/ToastContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import type { Dictionary } from "@/i18n";
@@ -228,6 +231,7 @@ export const DomainSettings = () => {
   } = useProjectSettings();
   const { showToast } = useToast();
   const { t } = useI18n();
+  const router = useRouter();
   const { baseDomain, selfHosted } = usePlatform();
 
   const [newDomain, setNewDomain] = useState("");
@@ -276,6 +280,15 @@ export const DomainSettings = () => {
   } | null>(null);
   const [editingRouteServiceId, setEditingRouteServiceId] = useState<string | null>(null);
   const [routeSavingServiceId, setRouteSavingServiceId] = useState<string | null>(null);
+  // Local draft for the "Edit route" modal — the card edits this in memory; the
+  // API is hit ONCE on Save (not on every toggle/keystroke).
+  const [routeDraft, setRouteDraft] = useState<{
+    exposed: boolean;
+    domainType: "free" | "custom";
+    domain: string;
+    customDomain: string;
+    exposedPort: string;
+  } | null>(null);
   // "Add route" form (services projects): a generic domain → port entry. The
   // port is matched to the service that owns it; that service is then exposed.
   const [showAddRoute, setShowAddRoute] = useState(false);
@@ -442,6 +455,24 @@ export const DomainSettings = () => {
       setEditingRouteServiceId(null);
     }
   }, [editingRouteServiceId, services]);
+
+  // Seed the edit-route draft once per open (keyed on the service id, NOT on
+  // `services` — a background refresh must not clobber in-progress edits).
+  useEffect(() => {
+    const svc = services.find((s) => s.id === editingRouteServiceId);
+    if (!svc) {
+      setRouteDraft(null);
+      return;
+    }
+    setRouteDraft({
+      exposed: svc.exposed,
+      domainType: svc.domainType === "custom" ? "custom" : "free",
+      domain: svc.domain ?? "",
+      customDomain: svc.customDomain ?? "",
+      exposedPort: svc.exposedPort || firstContainerPort(svc.ports),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingRouteServiceId]);
 
   // Live-preview DNS records as the user types — self-hosted only.
   //
@@ -814,6 +845,33 @@ export const DomainSettings = () => {
     setIsEditingDomains(false);
   };
 
+  // A project with a deployment but NO public route yet has no edge (OpenResty)
+  // installed — e.g. a just-migrated image-only services stack, or an
+  // internal-only stack deployed with no domains. OpenResty is only ever
+  // ensured by a DEPLOY (the single routing-ensure pipe, and the only place the
+  // edge-takeover consent modal can show). So adding the FIRST route must kick a
+  // deploy; a normal already-routed project keeps the live best-effort apply
+  // (no redeploy). Self-hosted only — cloud routes via the cloud edge.
+  const isEdgeless = () =>
+    selfHosted &&
+    !!projectData.activeDeploymentId &&
+    domainSummaries.length === 0 &&
+    !services.some((s) => s.enabled && s.exposed);
+
+  // Redeploy (image-only needs no source) so the deploy preflight installs
+  // OpenResty + registers the new route, then land on the build screen where
+  // the takeover modal surfaces if the old proxy still holds 80/443. Route is
+  // already saved, so a trigger failure is non-fatal (deploy manually).
+  const publishFirstRoute = async () => {
+    try {
+      const res = await deployApi.trigger({ projectId: id });
+      showToast(t.projectSettings.domains.toast.publishing, "success", t.projectSettings.domains.toast.domainsTitle);
+      openTriggeredBuild(router, res, id);
+    } catch (error) {
+      showToast(getApiErrorMessage(error, t.projectSettings.domains.toast.publishFailed), "error", t.projectSettings.domains.toast.domainsTitle);
+    }
+  };
+
   // Persist a specific ordering of the project's public endpoints. Endpoint
   // ORDER is the source of truth for the primary domain (index 0 → primary),
   // so both "Save changes" (edit) and "Set as primary" (reorder) route through
@@ -823,6 +881,7 @@ export const DomainSettings = () => {
     endpoints: PublicEndpoint[],
     successMessage = t.projectSettings.domains.toast.routingUpdated,
   ): Promise<boolean> => {
+    const wasEdgeless = isEdgeless();
     const payload = endpoints
       .map((endpoint) => buildPublicEndpointPayload(endpoint, hasProjectServer))
       .filter((endpoint): endpoint is NonNullable<ReturnType<typeof buildPublicEndpointPayload>> => endpoint !== null);
@@ -888,6 +947,9 @@ export const DomainSettings = () => {
       if (id) invalidateProjectCaches(id);
       showToast(successMessage, "success", t.projectSettings.domains.toast.domainsTitle);
       setIsEditingDomains(false);
+      // First route on an edge-less project → deploy to install OpenResty + show
+      // the takeover modal. Navigates away to the build screen.
+      if (wasEdgeless) await publishFirstRoute();
       return true;
     } catch (error) {
       showToast(getApiErrorMessage(error, t.projectSettings.domains.toast.routingUpdateFailed), "error", t.projectSettings.domains.toast.domainsTitle);
@@ -989,7 +1051,11 @@ export const DomainSettings = () => {
     };
   };
 
-  const handleServiceRouteUpdate = async (serviceId: string, patch: Partial<ServiceInput>) => {
+  const handleServiceRouteUpdate = async (
+    serviceId: string,
+    patch: Partial<ServiceInput>,
+  ): Promise<boolean> => {
+    const wasEdgeless = isEdgeless();
     setRouteSavingServiceId(serviceId);
     try {
       const result = await servicesApi.update(id, serviceId, patch);
@@ -997,9 +1063,14 @@ export const DomainSettings = () => {
         throw new Error("Failed to update service route");
       }
       await refreshServices();
+      // First exposed route on an edge-less project → deploy to install
+      // OpenResty + show the takeover modal (navigates to the build screen).
+      if (wasEdgeless && patch.exposed) await publishFirstRoute();
+      return true;
     } catch (error) {
       console.error("Failed to update service route:", error);
       showToast(t.projectSettings.domains.toast.routeUpdateFailed, "error");
+      return false;
     } finally {
       setRouteSavingServiceId(null);
     }
@@ -1154,6 +1225,39 @@ export const DomainSettings = () => {
   const editingRouteService =
     services.find((service) => service.id === editingRouteServiceId) ?? null;
   const editingRoute = editingRouteService ? getServiceRouteSummary(editingRouteService) : null;
+
+  // Diff the edit-route draft against the service to enable Save + build the patch.
+  const routeOriginalPort = editingRouteService
+    ? editingRouteService.exposedPort || firstContainerPort(editingRouteService.ports)
+    : "";
+  const routeDirty = Boolean(
+    editingRouteService &&
+      routeDraft &&
+      (routeDraft.exposed !== editingRouteService.exposed ||
+        routeDraft.domainType !== (editingRouteService.domainType === "custom" ? "custom" : "free") ||
+        routeDraft.domain !== (editingRouteService.domain ?? "") ||
+        routeDraft.customDomain !== (editingRouteService.customDomain ?? "") ||
+        routeDraft.exposedPort !== routeOriginalPort),
+  );
+  const routeSaving = editingRouteService ? routeSavingServiceId === editingRouteService.id : false;
+
+  const handleSaveRoute = async () => {
+    if (!editingRouteService || !routeDraft) return;
+    const patch: Partial<ServiceInput> = {};
+    if (routeDraft.exposed !== editingRouteService.exposed) patch.exposed = routeDraft.exposed;
+    if (routeDraft.domainType !== (editingRouteService.domainType === "custom" ? "custom" : "free"))
+      patch.domainType = routeDraft.domainType;
+    if (routeDraft.domain !== (editingRouteService.domain ?? "")) patch.domain = routeDraft.domain;
+    if (routeDraft.customDomain !== (editingRouteService.customDomain ?? ""))
+      patch.customDomain = routeDraft.customDomain;
+    if (routeDraft.exposedPort !== routeOriginalPort) patch.exposedPort = routeDraft.exposedPort;
+    if (Object.keys(patch).length === 0) {
+      setEditingRouteServiceId(null);
+      return;
+    }
+    const ok = await handleServiceRouteUpdate(editingRouteService.id, patch);
+    if (ok) setEditingRouteServiceId(null);
+  };
 
   const hasMultipleProjectDomains = domainSummaries.length > 1;
   // Toggling "Hide setup" should also wipe in-flight connect/verify state
@@ -1664,7 +1768,13 @@ export const DomainSettings = () => {
         onSaved={(cfg) => setProjectData((prev) => ({ ...prev, routingConfig: cfg }))}
       />
 
-      {editingRouteService && editingRoute && (
+      {/* Edge security rules (rate-limit / ban / geo / hotlink) — a distinct
+          feature from the routing config above, but the same kind of edge
+          concern, so it sits right here, collapsed by default. Moved out of the
+          Advanced tab. */}
+      <RouteRules />
+
+      {editingRouteService && editingRoute && routeDraft && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
           onClick={() => setEditingRouteServiceId(null)}
@@ -1695,40 +1805,41 @@ export const DomainSettings = () => {
             <div className="px-5 py-5">
               <RoutingSettingsCard
                 projectName={projectLabel}
-                domain={editingRouteService.domain ?? ""}
-                customDomain={editingRouteService.customDomain ?? ""}
-                domainType={editingRouteService.domainType === "custom" ? "custom" : "free"}
-                exposed={editingRouteService.exposed}
+                domain={routeDraft.domain}
+                customDomain={routeDraft.customDomain}
+                domainType={routeDraft.domainType}
+                exposed={routeDraft.exposed}
                 ports={editingRouteService.ports}
-                // Pre-fill the current route port. exposedPort is only set on an
-                // explicit choice; when unset the effective port is the service's
-                // container port from its compose `ports` mapping (e.g. "8080:80"
-                // → "80"), so fall back to that instead of showing an empty field.
-                exposedPort={editingRouteService.exposedPort || firstContainerPort(editingRouteService.ports)}
-                disabled={routeSavingServiceId === editingRouteService.id}
+                exposedPort={routeDraft.exposedPort}
+                disabled={routeSaving}
                 liveUrl={editingRoute.connected ? editingRoute.liveUrl : null}
-                onExposedChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { exposed: value })
-                }
-                onDomainTypeChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { domainType: value })
-                }
-                onDomainChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { domain: value })
-                }
-                onCustomDomainChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { customDomain: value })
-                }
-                onExposedPortChange={(value) =>
-                  handleServiceRouteUpdate(editingRouteService.id, { exposedPort: value })
-                }
-                saveMode="explicit"
+                // The card edits the in-memory draft only — the API is hit ONCE
+                // on Save. saveMode="change" reports each edit straight to state
+                // (no per-keystroke/per-toggle request, no inline pill).
+                onExposedChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, exposed: value } : prev))}
+                onDomainTypeChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, domainType: value } : prev))}
+                onDomainChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, domain: value } : prev))}
+                onCustomDomainChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, customDomain: value } : prev))}
+                onExposedPortChange={(value) => setRouteDraft((prev) => (prev ? { ...prev, exposedPort: value } : prev))}
+                saveMode="change"
               />
-              {!editingRouteService.enabled && editingRouteService.exposed && (
+              {!editingRouteService.enabled && routeDraft.exposed && (
                 <p className="mt-3 text-xs text-warning">
                   {t.projectSettings.domains.editRoute.disabledWarning}
                 </p>
               )}
+            </div>
+
+            <div className="flex items-center justify-end border-t border-border/40 px-5 py-4">
+              <button
+                type="button"
+                onClick={handleSaveRoute}
+                disabled={!routeDirty || routeSaving}
+                className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-primary px-4 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {routeSaving && <Loader2 className="size-3.5 animate-spin" />}
+                {t.projectSettings.domains.editRoute.save}
+              </button>
             </div>
           </div>
         </div>

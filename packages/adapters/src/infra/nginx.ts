@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 
 import type { CommandExecutor, ManualCert, RouteConfig, SslResult } from "../types";
 import type { RoutingProvider, SslProvider } from "./types";
-import { LUA_LOGGER_PATH, RULES_GUARD_PATH, buildReloadCommand, detectOpenRestyPaths, type OpenRestyPaths } from "./openresty-lua";
+import { LUA_LOGGER_PATH, RULES_GUARD_PATH, luaSourceAvailable, buildReloadCommand, detectOpenRestyPaths, type OpenRestyPaths } from "./openresty-lua";
 import { safeErrorMessage } from "@repo/core";
 
 /** Reverse-proxy headers shared by every proxy_pass location. */
@@ -301,6 +301,17 @@ export class NginxProvider implements RoutingProvider, SslProvider {
 `
       : "";
 
+    // Fail-safe: only emit the Lua directives when the scripts are actually
+    // installable. On a build that dropped the Lua from its bundle, referencing
+    // a missing file makes OpenResty 500 EVERY request (total outage). Omitting
+    // them means the edge rules-engine + analytics logging are off, but the site
+    // SERVES. luaSourceAvailable() is the same signal the installer gates on.
+    const edgeLua = luaSourceAvailable();
+    const luaLogOnly = edgeLua ? `    log_by_lua_file ${LUA_LOGGER_PATH};` : "";
+    const luaProxy = edgeLua
+      ? `    log_by_lua_file ${LUA_LOGGER_PATH};\n    access_by_lua_file ${RULES_GUARD_PATH};`
+      : "";
+
     let serverBlock: string;
 
     if (route.tls && (await this.certsExist(route.domain))) {
@@ -312,7 +323,7 @@ server {
     listen 80;
     server_name ${route.domain};
 
-    log_by_lua_file ${LUA_LOGGER_PATH};
+${luaLogOnly}
 
     location /.well-known/acme-challenge/ {
         root /var/www/acme;
@@ -327,8 +338,7 @@ server {
     listen 443 ssl;
     server_name ${route.domain};
 
-    log_by_lua_file ${LUA_LOGGER_PATH};
-    access_by_lua_file ${RULES_GUARD_PATH};
+${luaProxy}
 
     ssl_certificate ${certPath};
     ssl_certificate_key ${keyPath};
@@ -346,8 +356,7 @@ server {
     listen 80;
     server_name ${route.domain};
 
-    log_by_lua_file ${LUA_LOGGER_PATH};
-    access_by_lua_file ${RULES_GUARD_PATH};
+${luaProxy}
 ${serverHeaders}
     location /.well-known/acme-challenge/ {
         root /var/www/acme;

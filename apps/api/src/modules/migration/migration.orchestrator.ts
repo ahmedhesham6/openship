@@ -35,7 +35,9 @@ import {
 } from "@repo/adapters";
 import type { RequestContext } from "../../lib/request-context";
 import { createServerDockerRuntime } from "../../lib/deployment-runtime";
+import { withKeyedMutex } from "../../lib/provision-lock";
 import { requestBuildAccess } from "../deployments/build.service";
+import { teardownProject } from "../projects/project-teardown";
 import { discoverServerStack } from "./docker-inspect.service";
 import { adoptServerStack } from "./migrate.service";
 import { isMovableBind } from "./migration-preflight";
@@ -88,32 +90,51 @@ async function runPool<T, R>(
 }
 
 class MigrationOrchestratorImpl {
-  /** Create the run row and kick the async pipeline. Returns immediately. */
+  /** Create the run row and kick the async pipeline. Returns immediately.
+   *  Serialized + in-flight-guarded so two concurrent starts (double-click,
+   *  client retry, two operators) can't race the SAME server — which would stop
+   *  the same source containers, clobber the same volumes, and could both cut
+   *  over, destroying the source. */
   async begin(
     ctx: RequestContext,
     input: StartMigrationInput,
   ): Promise<{ migrationId: string; confirmationToken: string }> {
-    const confirmationToken = crypto.randomBytes(8).toString("hex");
-    const mode =
-      input.sourceServerId === input.targetServerId ? "same_server" : "cross_server";
-    const run = await repos.dockerMigrationRun.create({
-      id: `dmr_${crypto.randomUUID()}`,
-      organizationId: input.organizationId,
-      sourceServerId: input.sourceServerId,
-      targetServerId: input.targetServerId,
-      projectName: input.projectName,
-      serviceNames: input.serviceNames,
-      status: "queued",
-      mode,
-      killOriginals: input.killOriginals,
-      confirmationToken,
+    // Global begin lock: migrations are rare, so serializing the (check → create)
+    // makes the guard atomic in-process. (A multi-process API would additionally
+    // need a DB constraint; self-hosted runs one API process.)
+    return withKeyedMutex("docker-migration:begin", async () => {
+      const active = [
+        ...(await repos.dockerMigrationRun.findActiveForServer(input.sourceServerId)),
+        ...(await repos.dockerMigrationRun.findActiveForServer(input.targetServerId)),
+      ];
+      if (active.length > 0) {
+        throw new Error(
+          "A migration is already in progress for this server. Wait for it to finish (or resolve its cutover) before starting another.",
+        );
+      }
+
+      const confirmationToken = crypto.randomBytes(8).toString("hex");
+      const mode =
+        input.sourceServerId === input.targetServerId ? "same_server" : "cross_server";
+      const run = await repos.dockerMigrationRun.create({
+        id: `dmr_${crypto.randomUUID()}`,
+        organizationId: input.organizationId,
+        sourceServerId: input.sourceServerId,
+        targetServerId: input.targetServerId,
+        projectName: input.projectName,
+        serviceNames: input.serviceNames,
+        status: "queued",
+        mode,
+        killOriginals: input.killOriginals,
+        confirmationToken,
+      });
+      setImmediate(() => {
+        void this.run(ctx, run.id, input).catch((err) =>
+          console.error(`[migration] ${run.id} crashed:`, safeErrorMessage(err)),
+        );
+      });
+      return { migrationId: run.id, confirmationToken };
     });
-    setImmediate(() => {
-      void this.run(ctx, run.id, input).catch((err) =>
-        console.error(`[migration] ${run.id} crashed:`, safeErrorMessage(err)),
-      );
-    });
-    return { migrationId: run.id, confirmationToken };
   }
 
   private async transition(
@@ -146,14 +167,29 @@ class MigrationOrchestratorImpl {
     const sameServer = sourceServerId === targetServerId;
     let scannedContainerIds: Record<string, string> = {};
     let deploymentId: string | undefined;
+    // Set only when adopt CREATED the project (not when it reused an existing
+    // same-name one) — so rollback tears down our own draft, never the user's.
+    let createdProjectId: string | undefined;
 
     try {
       // ── adopt ──
       await this.transition(id, "adopting");
       const stack = await discoverServerStack(sourceServerId, organizationId);
-      const chosen = stack.services.filter((s) => serviceNames.includes(s.name));
-      if (chosen.length === 0) {
+      const selected = stack.services.filter((s) => serviceNames.includes(s.name));
+      if (selected.length === 0) {
         throw new Error("None of the selected services were found on the server.");
+      }
+      // Never adopt the edge proxy (traefik/nginx/… on 80/443) — Openship's
+      // OpenResty replaces it. Drop it from the workload set and leave it
+      // UNTOUCHED (absent from scannedContainerIds, so moveData won't stop it):
+      // we never blind-stop the user's proxy. It's reclaimed later — with
+      // consent — when the user adds a domain to a migrated service and the
+      // routed deploy's edge-takeover modal offers to take over 80/443.
+      const chosen = selected.filter((s) => !s.proxyKind);
+      if (chosen.length === 0) {
+        throw new Error(
+          "Only a reverse proxy was selected. Openship installs its own edge on 80/443 — pick the app services to migrate instead.",
+        );
       }
       const blocked = chosen.filter((s) => Boolean(s.build) && !s.image);
       if (blocked.length > 0) {
@@ -176,6 +212,7 @@ class MigrationOrchestratorImpl {
         volumeStrategies: input.volumeStrategies,
       });
       const projectId = adopt.projectId;
+      if (adopt.created) createdProjectId = projectId;
       await this.transition(id, "adopting", { projectId, scannedContainerIds });
 
       // ── moving_data: quiesce originals (both) + copy volumes (cross-server) ──
@@ -207,9 +244,15 @@ class MigrationOrchestratorImpl {
 
       // ── verifying ──
       await this.transition(id, "verifying");
-      const ok = await this.waitForDeployment(deploymentId);
-      if (!ok) {
-        throw new Error("Deployment on the target server did not become ready.");
+      const verified = await this.waitForDeployment(deploymentId);
+      if (!verified || verified.status !== "ready") {
+        // Surface WHY, not a dead-end "did not become ready": the target
+        // deployment's own error, its terminal status, or a timeout.
+        const mins = Math.round(VERIFY_TIMEOUT_MS / 60000);
+        const reason = !verified
+          ? `it was still deploying after ${mins} minutes`
+          : verified.errorMessage?.trim() || `the deployment ended as "${verified.status}"`;
+        throw new Error(`The target deployment did not become ready — ${reason}.`);
       }
 
       // ── cutover (opt-in) / awaiting_cutover ──
@@ -223,10 +266,12 @@ class MigrationOrchestratorImpl {
       }
     } catch (err) {
       await this.rollback(
+        ctx,
         id,
-        { sourceServerId, targetServerId, organizationId, sameServer },
+        { sourceServerId, targetServerId },
         scannedContainerIds,
         deploymentId,
+        createdProjectId,
         safeErrorMessage(err),
       );
     }
@@ -332,6 +377,22 @@ class MigrationOrchestratorImpl {
             });
           }
         }
+
+        // Cross-server reuses BARE volume names on the target, and transfer runs
+        // with clearTarget:true — so a same-named volume already holding data on
+        // B (from an unrelated stack) would be silently wiped. Refuse BEFORE any
+        // destructive write; the caller's rollback then restarts the originals.
+        const conflicts: string[] = [];
+        for (const task of tasks) {
+          const probe = await task.dst.exec.probeVolume?.(task.dst.handle, task.dst.sourceId);
+          if (probe?.exists && !probe.empty) conflicts.push(`${task.label}/${task.dst.sourceId}`);
+        }
+        if (conflicts.length > 0) {
+          throw new Error(
+            `Target server already has data in volume(s): ${conflicts.join(", ")}. ` +
+              "Remove or rename them on the target, then retry — refusing to overwrite existing data.",
+          );
+        }
       }
 
       // Bounded parallelism — a few volumes move at once without saturating a
@@ -354,17 +415,19 @@ class MigrationOrchestratorImpl {
     }
   }
 
-  /** Poll the target deployment until terminal. `ready` = success. */
-  private async waitForDeployment(deploymentId: string): Promise<boolean> {
+  /** Poll the target deployment until terminal. Returns the terminal row (its
+   *  status/errorMessage tell the caller why it ended), or null if the verify
+   *  window elapsed before it reached a terminal state. */
+  private async waitForDeployment(
+    deploymentId: string,
+  ): Promise<Awaited<ReturnType<typeof repos.deployment.findById>> | null> {
     const deadline = Date.now() + VERIFY_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const dep = await repos.deployment.findById(deploymentId);
-      if (dep && TERMINAL_DEPLOY.has(dep.status)) {
-        return dep.status === "ready";
-      }
+      if (dep && TERMINAL_DEPLOY.has(dep.status)) return dep;
       await new Promise((r) => setTimeout(r, VERIFY_POLL_MS));
     }
-    return false;
+    return null;
   }
 
   /** Destroy the originals on the source (by scanned container id — they carry
@@ -421,22 +484,24 @@ class MigrationOrchestratorImpl {
     return { ok: true };
   }
 
-  private async rollback(
-    id: string,
-    ctx: {
-      sourceServerId: string;
-      targetServerId: string;
-      organizationId: string;
-      sameServer: boolean;
-    },
+  /**
+   * Tear down whatever landed on the target, then restart the originals on the
+   * source. Shared by the live rollback path and boot recovery. Never destroys
+   * the source's volumes/data.
+   *
+   * Same-server is INCLUDED (the previous `!sameServer` gate was the bug): a
+   * partial same-server deploy holds the reused ports/volumes in place, so its
+   * containers MUST be removed before the originals can start — otherwise the
+   * restart fails on a port/mount clash and both stacks stay down. Teardown
+   * happens before restart for exactly this reason.
+   */
+  private async teardownTargetAndRestoreSource(
+    ctx: { sourceServerId: string; targetServerId: string; organizationId: string },
     scannedContainerIds: Record<string, string>,
     deploymentId: string | undefined,
-    errorMessage: string,
   ): Promise<void> {
-    // Best-effort: tear down whatever landed on the target, then bring the
-    // originals back up on the source. Never destroy the source.
-    try {
-      if (deploymentId && !ctx.sameServer) {
+    if (deploymentId) {
+      try {
         const rtB = await createServerDockerRuntime(ctx.targetServerId, ctx.organizationId);
         try {
           const containers = await rtB.listDeploymentContainers(deploymentId);
@@ -446,9 +511,9 @@ class MigrationOrchestratorImpl {
         } finally {
           await rtB.dispose().catch(() => {});
         }
+      } catch (err) {
+        console.warn(`[migration] target teardown failed:`, safeErrorMessage(err));
       }
-    } catch (err) {
-      console.warn(`[migration] ${id} rollback teardown failed:`, safeErrorMessage(err));
     }
     try {
       const rtA = await createServerDockerRuntime(ctx.sourceServerId, ctx.organizationId);
@@ -460,11 +525,122 @@ class MigrationOrchestratorImpl {
         await rtA.dispose().catch(() => {});
       }
     } catch (err) {
-      console.warn(`[migration] ${id} rollback restart failed:`, safeErrorMessage(err));
+      console.warn(`[migration] source restore failed:`, safeErrorMessage(err));
     }
+  }
+
+  private async rollback(
+    ctx: RequestContext,
+    id: string,
+    servers: { sourceServerId: string; targetServerId: string },
+    scannedContainerIds: Record<string, string>,
+    deploymentId: string | undefined,
+    createdProjectId: string | undefined,
+    errorMessage: string,
+  ): Promise<void> {
+    // Restore the user's production stack FIRST — it's the priority; the draft
+    // cleanup below is secondary bookkeeping.
+    await this.teardownTargetAndRestoreSource(
+      {
+        sourceServerId: servers.sourceServerId,
+        targetServerId: servers.targetServerId,
+        organizationId: ctx.organizationId,
+      },
+      scannedContainerIds,
+      deploymentId,
+    );
+
+    // A failed migration must not leave the draft project it created behind.
+    // Only projects THIS run created are dropped (never a pre-existing one the
+    // user already had). Reuse the canonical teardown (force = cancel the
+    // in-flight/timed-out deploy first, then drop rows) so no divergent delete
+    // path — but never wipe volumes (the reused originals hold production data),
+    // and never let a cleanup hiccup mask the real migration error.
+    if (createdProjectId) {
+      try {
+        await teardownProject(ctx, createdProjectId, {
+          force: true,
+          wipeVolumes: false,
+          forceOrphan: true,
+        });
+      } catch (err) {
+        console.warn(
+          `[migration] draft project cleanup failed for ${createdProjectId}:`,
+          safeErrorMessage(err),
+        );
+      }
+    }
+
     await this.transition(id, "rolled_back", {
       errorMessage: errorMessage.slice(0, 4096),
     });
+  }
+
+  /**
+   * Boot recovery. A process restart mid-migration leaves the in-memory pipeline
+   * dead with the source containers STOPPED (moveData quiesces them before the
+   * deploy) — so a crash would strand a stopped production stack forever. For
+   * every run stuck in a destructive in-flight phase, restart the originals and
+   * mark it rolled_back.
+   *
+   *   - `awaiting_cutover` is a parked SUCCESS (resolveCutover is DB-driven and
+   *     survives a restart) → leave it untouched.
+   *   - `queued` never stopped anything → just mark it rolled_back, no restart.
+   */
+  async recoverInterruptedMigrations(): Promise<void> {
+    let runs: Awaited<ReturnType<typeof repos.dockerMigrationRun.listInFlight>>;
+    try {
+      runs = await repos.dockerMigrationRun.listInFlight();
+    } catch (err) {
+      console.warn(`[migration] recovery scan failed:`, safeErrorMessage(err));
+      return;
+    }
+    for (const run of runs) {
+      if (run.status === "awaiting_cutover") continue;
+      const scanned = (run.scannedContainerIds ?? {}) as Record<string, string>;
+
+      // A crash mid-CUTOVER is NOT a rollback: the target was already verified
+      // healthy and the operator opted to destroy the source, so tearing the
+      // target down + trying to restart already-destroyed originals would leave
+      // BOTH sides down and invert a succeeded migration. Instead finish the
+      // (idempotent) cutover — destroying an already-gone container is a no-op —
+      // and mark it succeeded.
+      if (run.status === "cutover") {
+        if (run.sourceServerId) {
+          try {
+            await this.cutover(run.sourceServerId, run.organizationId, scanned);
+          } catch (err) {
+            console.warn(`[migration] recovery cutover ${run.id} failed:`, safeErrorMessage(err));
+          }
+        }
+        await repos.dockerMigrationRun
+          .transition(run.id, "succeeded")
+          .catch((err) =>
+            console.warn(`[migration] recovery transition ${run.id} failed:`, safeErrorMessage(err)),
+          );
+        continue;
+      }
+
+      if (run.status !== "queued" && run.sourceServerId) {
+        await this.teardownTargetAndRestoreSource(
+          {
+            sourceServerId: run.sourceServerId,
+            targetServerId: run.targetServerId ?? run.sourceServerId,
+            organizationId: run.organizationId,
+          },
+          scanned,
+          run.deploymentId ?? undefined,
+        );
+      }
+      await repos.dockerMigrationRun
+        .transition(run.id, "rolled_back", {
+          errorMessage:
+            "Recovered after an interruption — the original containers were restarted.",
+        })
+        .catch((err) =>
+          console.warn(`[migration] recovery transition ${run.id} failed:`, safeErrorMessage(err)),
+        );
+    }
   }
 }
 

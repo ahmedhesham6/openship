@@ -751,14 +751,22 @@ function checkConfig(snapshot: DeploymentConfigSnapshot, opts?: PreflightOptions
   if (!snapshot.branch && !snapshot.localPath && !snapshot.sourceStaged) missing.push("branch");
 
   if (opts?.multiService) {
-    // Registry-image-only services (hasBuild=false — e.g. an adopted Docker
-    // stack of postgres/redis migrated in) have nothing to clone or build, so
-    // a project repo/localPath is not required. A services project that DOES
-    // build (hasBuild=true) still needs its source.
-    const serviceMissing =
-      snapshot.hasBuild === false
-        ? missing.filter((m) => m !== "repository URL or local path" && m !== "branch")
-        : missing;
+    // A services/compose deploy needs a project repo/localPath ONLY when some
+    // enabled service builds FROM that shared source — a Dockerfile / build
+    // context, or a monorepo sub-app. Registry-image services (e.g. an adopted
+    // Docker stack of postgres/redis migrated in) build nothing, so no source
+    // is required. We inspect the ACTUAL services rather than trusting a single
+    // project-level `hasBuild` flag, which an adopted-Docker project may leave
+    // unset on the snapshot even though nothing builds — the bug that made a
+    // Docker migration fail preflight with "repository URL or local path".
+    const enabledServices = (opts.composeServices ?? []).filter((s) => s.enabled !== false);
+    const needsProjectSource =
+      enabledServices.length > 0
+        ? enabledServices.some((s) => s.kind === "monorepo" || !!s.build || !!s.dockerfile)
+        : snapshot.hasBuild !== false;
+    const serviceMissing = needsProjectSource
+      ? missing
+      : missing.filter((m) => m !== "repository URL or local path" && m !== "branch");
     if (serviceMissing.length > 0) {
       return {
         id: "config",

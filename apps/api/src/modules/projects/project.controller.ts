@@ -507,6 +507,19 @@ export async function remove(c: Context) {
     // attempts on resources the actor could actually see.
     return c.json({ ok: false, error: "Project not found" }, 404);
   }
+  // The Openship control plane deploys itself; deleting its app row would drop
+  // the Apps entry + domain while the host service keeps running (and orphan the
+  // edge route). It's managed from the CLI, never torn down via the dashboard.
+  if (proj.appTemplateId === "openship") {
+    return c.json(
+      {
+        ok: false,
+        code: "PROJECT_IS_CONTROL_PLANE",
+        error: "This is the Openship control plane — manage it with the CLI, not the dashboard.",
+      },
+      403,
+    );
+  }
   if (proj.deletionInProgress) {
     audit.recordAsync(auditContextFrom(c, organizationId, userId), {
       eventType: "project.deletion.rejected",
@@ -1390,7 +1403,7 @@ export async function linkRepo(c: Context) {
     // strategy === "domain" ⟹ webhookDomain is set (resolveWebhookStrategy).
     const webhookUrl = domainWebhookUrl(project.webhookDomain!);
     try {
-      const wh = await registerWebhook(ctx, owner, repo, webhookUrl);
+      const wh = await registerWebhook(ctx, owner, repo, webhookUrl, { projectId: project.id });
       if (wh.hookId) gitFields.webhookId = wh.hookId;
       gitFields.autoDeploy = true;
     } catch {
@@ -1400,7 +1413,7 @@ export async function linkRepo(c: Context) {
     // Self-hosted with a public URL - create a repo-level push webhook.
     let webhookId: number | null = null;
     try {
-      const result = await registerWebhook(ctx, owner, repo);
+      const result = await registerWebhook(ctx, owner, repo, undefined, { projectId: project.id });
       webhookId = result.hookId;
       gitFields.webhookId = webhookId;
       gitFields.autoDeploy = !!webhookId;
@@ -1411,8 +1424,8 @@ export async function linkRepo(c: Context) {
   // strategy === "none": no webhook path is available for this instance yet
 
   await repos.project.update(id, gitFields);
-  if (project.appId) {
-    await repos.projectApp.update(project.appId, {
+  if (project.groupId) {
+    await repos.projectGroup.update(project.groupId, {
       gitProvider: "github",
       gitOwner: owner,
       gitRepo: repo,
@@ -1428,7 +1441,7 @@ export async function linkRepo(c: Context) {
       installationId: (gitFields.installationId as number | undefined) ?? installationId,
       ...(typeof gitFields.webhookId === "number" ? { webhookId: gitFields.webhookId } : {}),
     };
-    const siblings = await repos.project.listByApp(project.appId);
+    const siblings = await repos.project.listByGroup(project.groupId);
     await Promise.all(
       siblings
         .filter((sibling) => sibling.id !== id)
@@ -1496,7 +1509,9 @@ async function ensureSharedWebhook(
   const existingHookId =
     project.webhookId ?? (await findSharedWebhookId(project.organizationId, owner, repo));
   const targetWebhookUrl = webhookUrl ?? sharedWebhookUrl();
-  const result = await registerWebhook(ctx, owner, repo, targetWebhookUrl);
+  const result = await registerWebhook(ctx, owner, repo, targetWebhookUrl, {
+    projectId: project.id,
+  });
   if (!result.hookId) return null;
 
   if (existingHookId && existingHookId !== result.hookId) {

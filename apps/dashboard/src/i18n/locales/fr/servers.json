@@ -55,7 +55,9 @@
     "online": "En ligne",
     "offline": "Hors ligne",
     "authKey": "clé",
-    "authPassword": "mot de passe"
+    "authPassword": "mot de passe",
+    "projects": "Projets",
+    "regions": "Régions"
   },
   "form": {
     "sshConnection": "Connexion SSH",

@@ -21,6 +21,7 @@
 import {
   resolve4,
   resolve6,
+  resolveCname,
   resolveMx,
   resolveTxt,
   reverse,
@@ -55,6 +56,8 @@ interface ExpectedRecord {
   name?: string;
   value?: string;
   priority?: number;
+  /** False = optional/recommended → a missing record warns instead of fails. */
+  required?: boolean;
 }
 
 interface ExpectedRecords {
@@ -64,6 +67,11 @@ interface ExpectedRecords {
   spf?: ExpectedRecord;
   dkim?: ExpectedRecord;
   dmarc?: ExpectedRecord;
+  /**
+   * Extra records beyond the fixed set — the outbound-relay send-hop records
+   * (SES DKIM CNAMEs + MAIL FROM MX/TXT). Verified with type-aware lookups.
+   */
+  extraRecords?: ExpectedRecord[];
 }
 
 export interface DnsScanResult {
@@ -87,10 +95,7 @@ export interface DnsScanResult {
  *     those test the shared `mail.<installDomain>` host, which the primary
  *     scan already covers, and additional domains never carry them.
  */
-export async function scanDns(
-  serverId: string,
-  domain?: string,
-): Promise<DnsScanResult> {
+export async function scanDns(serverId: string, domain?: string): Promise<DnsScanResult> {
   const state = await sshManager.withExecutor(serverId, (exec) => readState(exec));
   if (!state || !state.domain) {
     return { domain: "", scannedAt: Date.now(), checks: [] };
@@ -112,6 +117,8 @@ export async function scanDns(
       checkDkim(target, expected.dkim),
       checkDmarc(target, expected.dmarc),
       checkPtr(expected.a, target),
+      // Outbound-relay send-hop records (SES DKIM CNAMEs + MAIL FROM), if any.
+      ...(expected.extraRecords ?? []).map((r, i) => checkExtra(r, i)),
     ]);
     return {
       domain: target,
@@ -131,6 +138,9 @@ export async function scanDns(
     checkSpf(target, expected.spf),
     checkDkim(target, expected.dkim),
     checkDmarc(target, expected.dmarc),
+    // Outbound-relay send-hop records (SES DKIM CNAMEs + MAIL FROM) when this
+    // domain routes through the relay — mirrors the primary-domain branch.
+    ...(expected.extraRecords ?? []).map((r, i) => checkExtra(r, i)),
   ]);
   return {
     domain: target,
@@ -167,10 +177,7 @@ async function checkA(domain: string, exp?: ExpectedRecord): Promise<DnsCheck | 
   }
 }
 
-async function checkAaaa(
-  domain: string,
-  exp?: ExpectedRecord,
-): Promise<DnsCheck | null> {
+async function checkAaaa(domain: string, exp?: ExpectedRecord): Promise<DnsCheck | null> {
   if (!exp?.value) return null;
   const name = exp.name || `mail.${domain}`;
   try {
@@ -209,10 +216,7 @@ async function checkAaaa(
   }
 }
 
-async function checkMx(
-  domain: string,
-  exp?: ExpectedRecord,
-): Promise<DnsCheck | null> {
+async function checkMx(domain: string, exp?: ExpectedRecord): Promise<DnsCheck | null> {
   if (!exp?.value) return null;
   try {
     const mxs = await resolveMx(domain);
@@ -239,9 +243,7 @@ async function checkMx(
       recordType: "MX",
       status: match ? "pass" : "warn",
       expected: wanted,
-      actual: mxs
-        .map((m) => `${trimDot(m.exchange)} (priority ${m.priority})`)
-        .join(", "),
+      actual: mxs.map((m) => `${trimDot(m.exchange)} (priority ${m.priority})`).join(", "),
       message: match
         ? "MX record points at the mail server."
         : `MX records exist but none point at ${wanted}. Mail will be delivered elsewhere.`,
@@ -251,14 +253,12 @@ async function checkMx(
   }
 }
 
-async function checkSpf(
-  domain: string,
-  exp?: ExpectedRecord,
-): Promise<DnsCheck | null> {
+async function checkSpf(domain: string, exp?: ExpectedRecord): Promise<DnsCheck | null> {
   if (!exp?.value) return null;
   try {
     const txt = (await resolveTxt(domain)).map((parts) => parts.join(""));
-    const spf = txt.find((t) => /^v=spf1\b/i.test(t));
+    const spfRecords = txt.filter((t) => /^v=spf1\b/i.test(t));
+    const spf = spfRecords[0];
     if (!spf) {
       return {
         key: "spf",
@@ -273,32 +273,52 @@ async function checkSpf(
           "No SPF record found. Outbound mail will be marked as suspicious by most receivers.",
       };
     }
+    if (spfRecords.length > 1) {
+      return {
+        key: "spf",
+        label: "SPF record",
+        description: "Lets receivers verify this server is authorised to send for the domain.",
+        queriedName: domain,
+        recordType: "TXT",
+        status: "fail",
+        expected: exp.value,
+        actual: spfRecords.join(" | "),
+        message:
+          "Multiple SPF records found. A domain must publish exactly one v=spf1 TXT record or receivers treat SPF as invalid.",
+      };
+    }
     // We can't do a strict equality - operators sometimes add their own
     // ip4: / include: entries. Pass if the record contains the install's
-    // mechanism (typically "mx" or matching include:).
+    // mechanism (typically "mx" or matching include:). When the outbound
+    // relay is on, the expected value carries `include:amazonses.com` — then
+    // the published record MUST include it too, or SES-relayed mail fails SPF.
     const containsMx = /\bmx\b/i.test(spf);
+    const needsSes = /include:amazonses\.com/i.test(exp.value);
+    const containsSes = /include:amazonses\.com/i.test(spf);
+    const ok = needsSes ? containsSes : containsMx;
     return {
       key: "spf",
       label: "SPF record",
       description: "Lets receivers verify this server is authorised to send for the domain.",
       queriedName: domain,
       recordType: "TXT",
-      status: containsMx ? "pass" : "warn",
+      status: ok ? "pass" : "warn",
       expected: exp.value,
       actual: spf,
-      message: containsMx
-        ? "SPF record exists and authorises the MX (this server)."
-        : "SPF record exists but doesn't include `mx`. Mail from this server may fail SPF.",
+      message: ok
+        ? needsSes
+          ? "SPF record authorises this server (mx) and Amazon SES (include)."
+          : "SPF record exists and authorises the MX (this server)."
+        : needsSes
+          ? "SPF record is missing `include:amazonses.com`. Mail relayed through SES will fail SPF until you add it."
+          : "SPF record exists but doesn't include `mx`. Mail from this server may fail SPF.",
     };
   } catch (err) {
     return missing("spf", "SPF record", domain, "TXT", exp.value, err);
   }
 }
 
-async function checkDkim(
-  domain: string,
-  exp?: ExpectedRecord,
-): Promise<DnsCheck | null> {
+async function checkDkim(domain: string, exp?: ExpectedRecord): Promise<DnsCheck | null> {
   if (!exp?.value) return null;
   const name = exp.name || `dkim._domainkey.${domain}`;
   try {
@@ -336,15 +356,21 @@ async function checkDkim(
   }
 }
 
-async function checkDmarc(
-  domain: string,
-  exp?: ExpectedRecord,
-): Promise<DnsCheck | null> {
+// DMARC Policy Record identification, per RFC 9989 sections 4.7/4.8/4.10:
+// the record must start with the version tag (no leading WSP), the tag name
+// is case-insensitive while the value is case-sensitively "DMARC1", WSP
+// (space/tab) may surround "=", and the tag must end at ";", WSP, or end of
+// record. So "v=dmarc1" is ignored outright and "v=DMARC10" is not a policy
+// record for this version of DMARC.
+const DMARC_VERSION_TAG = /^[vV][ \t]*=[ \t]*DMARC1(?:[ \t;]|$)/;
+
+async function checkDmarc(domain: string, exp?: ExpectedRecord): Promise<DnsCheck | null> {
   if (!exp?.value) return null;
   const name = exp.name || `_dmarc.${domain}`;
   try {
     const txt = (await resolveTxt(name)).map((parts) => parts.join(""));
-    const dmarc = txt.find((t) => /^v=DMARC1\b/i.test(t));
+    const dmarcRecords = txt.filter((t) => DMARC_VERSION_TAG.test(t));
+    const dmarc = dmarcRecords[0];
     if (!dmarc) {
       return {
         key: "dmarc",
@@ -356,6 +382,20 @@ async function checkDmarc(
         expected: exp.value,
         actual: "",
         message: "No DMARC record found. Some receivers will treat this as a risk signal.",
+      };
+    }
+    if (dmarcRecords.length > 1) {
+      return {
+        key: "dmarc",
+        label: "DMARC policy",
+        description: "Tells receivers what to do when SPF/DKIM fail for this domain.",
+        queriedName: name,
+        recordType: "TXT",
+        status: "fail",
+        expected: exp.value,
+        actual: dmarcRecords.join(" | "),
+        message:
+          "Multiple DMARC records found. Receivers discard every DMARC record at this name, so none of them apply. Publish exactly one v=DMARC1 TXT record at this name.",
       };
     }
     return {
@@ -424,11 +464,89 @@ async function checkPtr(
         status: "fail",
         expected: expectedHost,
         actual: "",
-        message:
-          "No PTR record set. Configure it at your VPS provider's panel.",
+        message: "No PTR record set. Configure it at your VPS provider's panel.",
       };
     }
     return missing("ptr", "PTR (reverse DNS)", aRecord.value, "PTR", expectedHost, err);
+  }
+}
+
+/**
+ * Verify one "extra" send-hop record (SES DKIM CNAME, or MAIL FROM MX/TXT).
+ * Type-aware: CNAME → resolveCname, MX → resolveMx, TXT → resolveTxt. A record
+ * flagged `required:false` (MAIL FROM) warns rather than fails when missing.
+ */
+async function checkExtra(exp: ExpectedRecord, idx: number): Promise<DnsCheck | null> {
+  if (!exp.value || !exp.name || !exp.type) return null;
+  const type = exp.type.toUpperCase();
+  const key = `extra:${type.toLowerCase()}:${idx}`;
+  const missStatus: DnsCheckStatus = exp.required === false ? "warn" : "fail";
+  const isDkim = type === "CNAME";
+  const label = isDkim ? "SES DKIM (CNAME)" : type === "MX" ? "MAIL FROM (MX)" : "MAIL FROM (TXT)";
+  const description = isDkim
+    ? `Delegates DKIM signing for the SES send-hop (${exp.name}).`
+    : `Custom MAIL FROM record for SES SPF/bounce alignment (${exp.name}).`;
+  try {
+    if (type === "CNAME") {
+      const targets = await resolveCname(exp.name);
+      const wanted = trimDot(exp.value).toLowerCase();
+      const matched = targets.some((tt) => trimDot(tt).toLowerCase() === wanted);
+      return {
+        key, label, description, queriedName: exp.name, recordType: "CNAME",
+        status: matched ? "pass" : targets.length ? "warn" : missStatus,
+        expected: wanted,
+        actual: targets.join(", "),
+        message: matched
+          ? "CNAME points at the SES DKIM target."
+          : targets.length
+            ? `CNAME resolves to ${targets.join(", ")} instead of ${wanted}.`
+            : "CNAME not published yet.",
+      };
+    }
+    if (type === "MX") {
+      const mxs = await resolveMx(exp.name);
+      const wanted = trimDot(exp.value).toLowerCase();
+      const matched = mxs.some((m) => trimDot(m.exchange).toLowerCase() === wanted);
+      return {
+        key, label, description, queriedName: exp.name, recordType: "MX",
+        status: matched ? "pass" : mxs.length ? "warn" : missStatus,
+        expected: wanted,
+        actual: mxs.map((m) => trimDot(m.exchange)).join(", "),
+        message: matched
+          ? "MAIL FROM MX is published."
+          : mxs.length
+            ? "An MX exists but doesn't match the SES feedback host."
+            : "MAIL FROM MX not published (recommended for alignment).",
+      };
+    }
+    // TXT (MAIL FROM SPF).
+    const txt = (await resolveTxt(exp.name)).map((parts) => parts.join(""));
+    const wanted = exp.value.replace(/\s+/g, "");
+    const matched =
+      txt.some((tt) => tt.replace(/\s+/g, "") === wanted) ||
+      txt.some((tt) => /^v=spf1\b/i.test(tt) && /include:amazonses\.com/i.test(tt));
+    return {
+      key, label, description, queriedName: exp.name, recordType: "TXT",
+      status: matched ? "pass" : txt.length ? "warn" : missStatus,
+      expected: exp.value,
+      actual: txt[0] ?? "",
+      message: matched
+        ? "MAIL FROM TXT is published."
+        : txt.length
+          ? "A TXT exists but doesn't match the expected MAIL FROM SPF."
+          : "MAIL FROM TXT not published (recommended for alignment).",
+    };
+  } catch (err) {
+    if (isNotFound(err)) {
+      return {
+        key, label, description, queriedName: exp.name, recordType: type,
+        status: missStatus,
+        expected: exp.value,
+        actual: "",
+        message: `${type} record not published yet.`,
+      };
+    }
+    return missing(key, label, exp.name, type, exp.value, err);
   }
 }
 

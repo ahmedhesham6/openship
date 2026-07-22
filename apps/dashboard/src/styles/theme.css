@@ -124,10 +124,12 @@
   /* ─ Semantic status (light: solid pastel -100 bg + -700 text + -200 border —
        the standard readable/colorful badge recipe. Solid hues, not low-opacity
        RGBA, which grays out over white and looks flat.) ─ */
-  --st-success-fg: #047857;  --st-success-bg: #d1fae5;  --st-success-bd: #a7f3d0;
-  --st-danger-fg:  #b91c1c;  --st-danger-bg:  #fee2e2;  --st-danger-bd:  #fecaca;
-  --st-warning-fg: #b45309;  --st-warning-bg: #fef3c7;  --st-warning-bd: #fde68a;
-  --st-info-fg:    #1d4ed8;  --st-info-bg:    #dbeafe;  --st-info-bd:    #bfdbfe;
+  /* Pre-token hardcoded recipe restored: bg-X-500/10 + border-X-500/20 (shared
+     with dark), text-X-600 on light. */
+  --st-success-fg: #059669;  --st-success-bg: rgba(16,185,129,.10);  --st-success-bd: rgba(16,185,129,.20);
+  --st-danger-fg:  #dc2626;  --st-danger-bg:  rgba(239,68,68,.10);   --st-danger-bd:  rgba(239,68,68,.20);
+  --st-warning-fg: #d97706;  --st-warning-bg: rgba(245,158,11,.10);  --st-warning-bd: rgba(245,158,11,.20);
+  --st-info-fg:    #2563eb;  --st-info-bg:    rgba(59,130,246,.10);  --st-info-bd:    rgba(59,130,246,.20);
   --st-neutral-fg: #52525b;  --st-neutral-bg: #f4f4f5;  --st-neutral-bd: #e4e4e7;
 }
 
@@ -227,10 +229,12 @@
   --th-spinner-fill:    #ffffff;
 
   /* ─ Semantic status (dark: brighter fg on near-black, lifted bg) ─ */
-  --st-success-fg: #34d399;  --st-success-bg: rgba(16,185,129,.14);  --st-success-bd: rgba(16,185,129,.26);
-  --st-danger-fg:  #f87171;  --st-danger-bg:  rgba(239,68,68,.14);   --st-danger-bd:  rgba(239,68,68,.28);
-  --st-warning-fg: #fbbf24;  --st-warning-bg: rgba(245,158,11,.14);  --st-warning-bd: rgba(245,158,11,.26);
-  --st-info-fg:    #60a5fa;  --st-info-bg:    rgba(59,130,246,.14);  --st-info-bd:    rgba(59,130,246,.26);
+  /* Pre-token hardcoded recipe restored: bg-X-500/10 + border-X-500/20 (shared
+     with light), text-X-400 on hard-black. */
+  --st-success-fg: #34d399;  --st-success-bg: rgba(16,185,129,.10);  --st-success-bd: rgba(16,185,129,.20);
+  --st-danger-fg:  #f87171;  --st-danger-bg:  rgba(239,68,68,.10);   --st-danger-bd:  rgba(239,68,68,.20);
+  --st-warning-fg: #fbbf24;  --st-warning-bg: rgba(245,158,11,.10);  --st-warning-bd: rgba(245,158,11,.20);
+  --st-info-fg:    #60a5fa;  --st-info-bg:    rgba(59,130,246,.10);  --st-info-bd:    rgba(59,130,246,.20);
   --st-neutral-fg: rgba(255,255,255,.50);  --st-neutral-bg: rgba(255,255,255,.05);  --st-neutral-bd: rgba(255,255,255,.10);
 }
 

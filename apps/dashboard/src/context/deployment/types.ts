@@ -235,6 +235,9 @@ export interface DeploymentConfig {
   /** One-click catalog app (repo-less services project). Deploys from its saved
    *  rows with no git source — treated like local/upload in the deploy guards. */
   isApp?: boolean;
+  /** Catalog template id (e.g. "n8n", "convex") — drives the schema-based app
+   *  settings step in the wizard for apps with `management:"schema"`. */
+  appTemplateId?: string;
   projectName: string;
   repo: string;
   owner: string;

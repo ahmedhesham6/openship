@@ -234,6 +234,9 @@ export async function getBuildSessionStatus(deploymentId: string) {
     // the "wrong port?" modal reappears (unless skipped) after a reload.
     portCheck: snapshot?.portCheck ?? null,
     portCheckSkipped: snapshot?.portCheckSkipped ?? [],
+    // A still-open decision prompt (edge 80/443 takeover, port conflict) so a
+    // refresh re-shows the modal immediately, before the SSE stream replays it.
+    pendingPrompt: memSession?.currentPrompt ?? null,
     errorCode:
       dep.errorMessage?.includes("PORT_IN_USE") || dep.errorMessage?.includes("EADDRINUSE")
         ? "PORT_IN_USE"

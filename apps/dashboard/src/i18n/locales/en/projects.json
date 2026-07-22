@@ -35,7 +35,8 @@
     "sourceLocal": "Local",
     "services": "Services",
     "static": "Static",
-    "standalone": "Standalone"
+    "standalone": "Standalone",
+    "updateAvailable": "Update"
   },
   "hosting": {
     "cloud": "Cloud",
@@ -98,7 +99,11 @@
     "teardownFailedAt": "Teardown failed at: {reasons}. Retry, or force-delete to orphan them.",
     "teardownFailed": "Teardown failed",
     "cleanupFailedTitle": "Cleanup failed",
-    "alreadyDeleted": "Project already deleted"
+    "alreadyDeleted": "Project already deleted",
+    "forceModalTitle": "Couldn't remove it from the source",
+    "forceModalBody": "The runtime couldn't be reached (or kept failing), so this project wasn't torn down. You can delete it from Openship anyway — the record is removed now and any leftover resources are reclaimed automatically once the server is reachable.",
+    "forceModalConfirm": "Delete from storage",
+    "forceModalCancel": "Cancel"
   },
   "sidebar": {
     "project": "Project",
@@ -110,6 +115,7 @@
     "production": "Production",
     "lastDeploy": "Last Deploy",
     "tabs": {
+      "appSettings": "Settings",
       "overview": "Overview",
       "services": "Apps & Services",
       "domains": "Domains",

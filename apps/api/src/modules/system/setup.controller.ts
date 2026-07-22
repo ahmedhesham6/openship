@@ -21,11 +21,19 @@ import { audit, auditContextFrom } from "../../lib/audit";
 import { getRequestContext } from "../../lib/request-context";
 import { clearAuthModeCache } from "../../lib/auth-mode";
 import { assertNotCloud } from "../../lib/controller-helpers";
+import { encrypt } from "../../lib/encryption";
+import {
+  sendInstanceTestEmail,
+  invalidateInstanceTransportCache,
+  canSendMail,
+} from "../../lib/mail";
 import { zeroAuthAllowed } from "../../middleware/zero-auth-guard";
 import { normalizeRollbackWindow } from "../../lib/release-retention";
+import { getInstanceReachability } from "../../lib/public-url";
 import { sshManager } from "../../lib/ssh-manager";
 import { encryptSecretField } from "@/lib/credential-encryption";
 import { ensureLocalUser, invalidateLocalUserCache } from "../../lib/local-user";
+import { provisionUser } from "../../lib/provision-user";
 import { COOKIE_PREFIX } from "../../lib/auth";
 import { mintSession } from "../../lib/cloud-auth-proxy";
 import { invalidatePlatformTransportCache } from "../../lib/mail";
@@ -196,6 +204,9 @@ export async function getSetup(c: Context) {
   const settings = await repos.instanceSettings.get();
   const servers = await repos.server.list();
   const hasServer = servers.length > 0;
+  // Source-of-truth for "can teammates reach this instance + at what URL" —
+  // drives the smart team-invite gate + its inline guidance (see TeamTab).
+  const teamReachability = await getInstanceReachability().catch(() => null);
 
   return c.json({
     configured: hasServer,
@@ -207,6 +218,7 @@ export async function getSetup(c: Context) {
     teamMode: settings?.teamMode ?? "single_user",
     migrationTargetUrl: settings?.migrationTargetUrl ?? null,
     migratedAt: settings?.migratedAt?.toISOString() ?? null,
+    teamReachability,
   });
 }
 
@@ -272,6 +284,120 @@ export async function updateSettings(c: Context) {
   }
 
   return c.json({ ok: true });
+}
+
+// ─── Instance SMTP (Settings → Email) ────────────────────────────────────────
+
+const SMTP_HOST_RE = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i;
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/**
+ * GET /system/settings/email — the instance SMTP config, MASKED. The password
+ * is never returned; `hasPassword` tells the UI whether one is stored so it can
+ * offer "leave blank to keep".
+ */
+export async function getEmailSettings(c: Context) {
+  const cloudGuard = assertNotCloud(c); if (cloudGuard) return cloudGuard;
+  const s = await repos.instanceSettings.get();
+  const configured = !!(s?.smtpHost && s?.smtpUser && s?.smtpPasswordEncrypted);
+  return c.json({
+    configured,
+    host: s?.smtpHost ?? null,
+    port: s?.smtpPort ?? null,
+    user: s?.smtpUser ?? null,
+    from: s?.smtpFrom ?? null,
+    hasPassword: !!s?.smtpPasswordEncrypted,
+    // Whether ANY transport can currently deliver (instance SMTP, mail-server
+    // mailbox, or env). Drives the "no email transport → set up SMTP" hints —
+    // e.g. the notification channel form.
+    deliverable: await canSendMail().catch(() => false),
+  });
+}
+
+/**
+ * PUT /system/settings/email — set (or clear) the instance SMTP config. The
+ * password is encrypted at rest; an omitted/blank password KEEPS the stored one
+ * (the client never receives it to echo back). An empty host clears the whole
+ * config (disables instance SMTP). Invalidates the mail transport cache so the
+ * next send picks up the change.
+ */
+export async function updateEmailSettings(c: Context) {
+  const cloudGuard = assertNotCloud(c); if (cloudGuard) return cloudGuard;
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const host = typeof body.host === "string" ? body.host.trim().toLowerCase() : "";
+
+  // Empty host = clear/disable instance SMTP.
+  if (!host) {
+    await repos.instanceSettings.upsert({
+      smtpHost: null,
+      smtpPort: null,
+      smtpUser: null,
+      smtpPasswordEncrypted: null,
+      smtpFrom: null,
+    });
+    invalidateInstanceTransportCache();
+    return c.json({ ok: true, configured: false });
+  }
+
+  if (!SMTP_HOST_RE.test(host)) return c.json({ error: "Invalid SMTP host" }, 400);
+
+  const user = typeof body.user === "string" ? body.user.trim() : "";
+  if (!user) return c.json({ error: "SMTP username is required" }, 400);
+
+  const portRaw =
+    body.port === undefined || body.port === null || body.port === "" ? 587 : Number(body.port);
+  if (!Number.isInteger(portRaw) || portRaw < 1 || portRaw > 65535) {
+    return c.json({ error: "Invalid SMTP port" }, 400);
+  }
+
+  const from = typeof body.from === "string" && body.from.trim() ? body.from.trim() : null;
+
+  // Password: a non-empty value replaces; blank/omitted keeps the existing one
+  // (the client never has the plaintext to resend). Require one on first set.
+  const existing = await repos.instanceSettings.get();
+  const passwordInput = typeof body.password === "string" ? body.password : "";
+  let smtpPasswordEncrypted: string | null;
+  if (passwordInput) {
+    smtpPasswordEncrypted = encrypt(passwordInput);
+  } else if (existing?.smtpPasswordEncrypted) {
+    smtpPasswordEncrypted = existing.smtpPasswordEncrypted;
+  } else {
+    return c.json({ error: "SMTP password is required" }, 400);
+  }
+
+  await repos.instanceSettings.upsert({
+    smtpHost: host,
+    smtpPort: portRaw,
+    smtpUser: user,
+    smtpPasswordEncrypted,
+    smtpFrom: from,
+  });
+  invalidateInstanceTransportCache();
+  return c.json({ ok: true, configured: true });
+}
+
+/**
+ * POST /system/settings/email/test — send a test message through the saved
+ * instance SMTP. Surfaces the real transport error (wrong host/port/creds) so
+ * the operator can fix it before relying on it for password resets.
+ */
+export async function sendTestEmail(c: Context) {
+  const cloudGuard = assertNotCloud(c); if (cloudGuard) return cloudGuard;
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const to = typeof body.to === "string" ? body.to.trim() : "";
+  if (!to || !EMAIL_RE.test(to)) {
+    return c.json({ error: "A valid recipient email is required" }, 400);
+  }
+
+  try {
+    await sendInstanceTestEmail(to);
+    return c.json({ ok: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to send test email";
+    return c.json({ ok: false, error: message }, 400);
+  }
 }
 
 /** DELETE /system/settings - remove server configuration */
@@ -394,11 +520,186 @@ export async function bootstrapAdmin(c: Context) {
   invalidateLocalUserCache();
   clearAuthModeCache();
 
-  audit.recordAsync(auditContextFrom(c, "instance", localUser.id), {
+  audit.recordAsync(auditContextFrom(c, `org_${localUser.id}`, localUser.id), {
     eventType: "admin.bootstrapped",
     resourceType: "instance-settings",
     resourceId: "instance",
     after: { userId: localUser.id, email },
+  });
+
+  return c.json({ ok: true, email });
+}
+
+/**
+ * POST /api/system/reset-admin-password — internal-token-gated password reset.
+ *
+ * The CLI holds the loopback internal token ("god access"), so a locked-out
+ * operator can reset their own login WITHOUT signing in — the recovery path for
+ * a forgotten password. Unlike bootstrap-admin this REQUIRES an existing admin,
+ * resets that account's credential password, and forces authMode back to "local"
+ * (so it also recovers a box that got stuck on a broken cloud login). Optional
+ * `email`/`name` let you correct the admin's address at the same time.
+ */
+export async function resetAdminPassword(c: Context) {
+  const cloudGuard = assertNotCloud(c); if (cloudGuard) return cloudGuard;
+
+  const body = (await c.req.json()) as { email?: unknown; name?: unknown; password?: unknown };
+  const password = typeof body.password === "string" ? body.password : "";
+  if (password.length < 8 || password.length > 128) {
+    return c.json({ error: "password must be 8-128 characters" }, 400);
+  }
+  if (typeof body.name === "string" && body.name.trim().length > 100) {
+    return c.json({ error: "name must be 1-100 characters" }, 400);
+  }
+
+  // Deterministic target: the founding owner (earliest real account), so on a
+  // multi-user box the reset never lands on an arbitrary member row.
+  const [admin] = await db
+    .select({ id: schema.user.id, email: schema.user.email, name: schema.user.name })
+    .from(schema.user)
+    .where(eq(schema.user.autoProvisioned, false))
+    .orderBy(schema.user.createdAt)
+    .limit(1);
+  if (!admin) {
+    return c.json({ error: "No admin account exists yet — run `openship` to create one." }, 409);
+  }
+
+  const email =
+    typeof body.email === "string" && body.email.trim()
+      ? body.email.trim().toLowerCase()
+      : admin.email;
+  if (!email || !email.includes("@") || email.length > 254) {
+    return c.json({ error: "email must be a valid address" }, 400);
+  }
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : admin.name;
+  const conflict = await repos.user.findByEmail(email);
+  if (conflict && conflict.id !== admin.id) {
+    return c.json({ error: "Another account already uses this email" }, 409);
+  }
+
+  const hashed = await hashPassword(password);
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.user)
+      .set({ email, name, emailVerified: true, updatedAt: new Date() })
+      .where(eq(schema.user.id, admin.id));
+    await tx
+      .delete(schema.account)
+      .where(and(eq(schema.account.userId, admin.id), eq(schema.account.providerId, "credential")));
+    await tx.insert(schema.account).values({
+      id: generateId("acc"),
+      accountId: admin.id,
+      providerId: "credential",
+      userId: admin.id,
+      password: hashed,
+    });
+    await tx
+      .insert(schema.instanceSettings)
+      .values({ id: "default", authMode: "local" })
+      .onConflictDoUpdate({ target: schema.instanceSettings.id, set: { authMode: "local", updatedAt: new Date() } });
+  });
+
+  // Password recovery must mean "regain sole control": revoke every existing
+  // session for the account so a stolen/leftover session can't survive the reset
+  // (session tokens are opaque row refs — rotating the credential alone doesn't
+  // invalidate them).
+  await repos.session.revokeAllForUser(admin.id);
+  invalidateLocalUserCache();
+  clearAuthModeCache();
+
+  // The admin's personal org (org_<id>) is created by provisionUser, so record
+  // against it — the literal "instance" has no organization row and the audit
+  // insert would fail its FK (event silently dropped).
+  audit.recordAsync(auditContextFrom(c, `org_${admin.id}`, admin.id), {
+    eventType: "admin.password_reset",
+    resourceType: "instance-settings",
+    resourceId: "instance",
+    after: { userId: admin.id, email },
+  });
+
+  return c.json({ ok: true, email });
+}
+
+/**
+ * POST /api/system/invite-signup — token-bound invited signup (self-host).
+ *
+ * The ONLY way to create an additional account on a self-hosted instance (public
+ * Better Auth signup is disabled by the sign-up route guard). Authorization is
+ * the unguessable invitation id from the emailed /accept-invite/<id> link — NOT
+ * the email string, and NOT proof-of-session. We validate the invitation is
+ * pending + unexpired + issued by a real instance admin, then create the account
+ * for the invitation's OWN email (never caller-supplied). The caller then signs
+ * in and accepts the invite via Better Auth (which consumes it, so it's
+ * single-use). Closes: invite-hijack (email-as-bearer), org-agnostic invite
+ * minting, and expired-invite reuse.
+ */
+export async function inviteSignup(c: Context) {
+  // SaaS uses open public signup; this endpoint is self-host only.
+  const cloudGuard = assertNotCloud(c); if (cloudGuard) return cloudGuard;
+
+  const body = (await c.req.json().catch(() => ({}))) as {
+    invitationId?: unknown;
+    name?: unknown;
+    password?: unknown;
+  };
+  const invitationId = typeof body.invitationId === "string" ? body.invitationId.trim() : "";
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  if (!invitationId) return c.json({ error: "invitationId is required" }, 400);
+  if (!name || name.length > 100) return c.json({ error: "name must be 1-100 characters" }, 400);
+  if (password.length < 8 || password.length > 128) {
+    return c.json({ error: "password must be 8-128 characters" }, 400);
+  }
+
+  // The invitation TOKEN is the authorization: it must exist, still be pending,
+  // and be unexpired. (An expired invite keeps status="pending", so check both.)
+  const [invite] = await db
+    .select({
+      email: schema.invitation.email,
+      status: schema.invitation.status,
+      expiresAt: schema.invitation.expiresAt,
+      inviterId: schema.invitation.inviterId,
+    })
+    .from(schema.invitation)
+    .where(eq(schema.invitation.id, invitationId))
+    .limit(1);
+  if (!invite || invite.status !== "pending" || invite.expiresAt.getTime() <= Date.now()) {
+    return c.json({ error: "This invitation is invalid or has expired." }, 403);
+  }
+
+  // The inviter must be a real INSTANCE admin (user.role === "admin"). A regular
+  // member is role "user" even though they own their personal org, so a bare
+  // member's self-issued invite can NEVER mint an instance account. (Every admin
+  // path — CLI bootstrap, zero-auth upgrade, cloud mirror — provisions role
+  // "admin"; only an explicit admin-plugin promotion adds more.)
+  const [inviter] = await db
+    .select({ role: schema.user.role })
+    .from(schema.user)
+    .where(eq(schema.user.id, invite.inviterId))
+    .limit(1);
+  if (!inviter || inviter.role !== "admin") {
+    return c.json({ error: "This invitation is invalid." }, 403);
+  }
+
+  // Email comes from the invitation, NEVER caller input — the attacker can't bind
+  // a different mailbox to the token.
+  const email = invite.email.trim().toLowerCase();
+  const existing = await repos.user.findByEmail(email);
+  if (existing) {
+    return c.json({ error: "An account with this email already exists — sign in and accept the invite." }, 409);
+  }
+
+  // Create the account (raw, like bootstrap-admin — bypasses the disabled public
+  // signUp). The caller signs in + accepts the invite via Better Auth next.
+  const userId = generateId("usr");
+  const hashed = await hashPassword(password);
+  await provisionUser({ id: userId, name, email, emailVerified: true });
+  await db.insert(schema.account).values({
+    id: generateId("acc"),
+    accountId: userId,
+    providerId: "credential",
+    userId,
+    password: hashed,
   });
 
   return c.json({ ok: true, email });

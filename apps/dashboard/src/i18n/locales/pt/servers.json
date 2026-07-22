@@ -55,7 +55,9 @@
     "online": "Online",
     "offline": "Offline",
     "authKey": "chave",
-    "authPassword": "senha"
+    "authPassword": "senha",
+    "projects": "Projetos",
+    "regions": "Regiões"
   },
   "form": {
     "sshConnection": "Conexão SSH",

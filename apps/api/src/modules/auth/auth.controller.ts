@@ -28,6 +28,7 @@ import type { Context } from "hono";
 import { setSignedCookie } from "hono/cookie";
 import { auth, COOKIE_PREFIX } from "../../lib/auth";
 import { env, localDashboardUrl } from "../../config/env";
+import { alignLoopbackOrigin } from "@repo/core";
 
 // ─── HTML result page ────────────────────────────────────────────────────────
 
@@ -147,11 +148,23 @@ export async function getSession(c: Context) {
  * the cookie, and reaches the dashboard.
  */
 export async function desktopLogin(c: Context) {
+  // The session cookie we mint below is host-only, scoped to whatever loopback
+  // host the browser used to reach this endpoint. Align the dashboard redirect
+  // to that SAME host (Host header) so the just-set cookie is actually sent —
+  // otherwise the fixed localDashboardUrl (e.g. localhost:3001) differs from the
+  // cookie's host (e.g. 127.0.0.1) and the dashboard lands cookieless, bouncing
+  // to /login (#44). Non-loopback hosts pass through unchanged (never off-box).
+  const host = c.req.header("host");
+  const proto = c.req.header("x-forwarded-proto")?.split(",")[0]?.trim() || "http";
+  const dashboardUrl = host
+    ? alignLoopbackOrigin(localDashboardUrl, `${proto}://${host}`)
+    : localDashboardUrl;
+
   // Same mint gate as getSession — loopback-only zero-auth, never remote.
   const { zeroAuthAllowed } = await import("../../middleware/zero-auth-guard");
   const gate = await zeroAuthAllowed(c);
   if (!gate.ok) {
-    return c.redirect(`${localDashboardUrl}/login`);
+    return c.redirect(`${dashboardUrl}/login`);
   }
 
   const { ensureLocalUser } = await import("../../lib/local-user");
@@ -166,7 +179,7 @@ export async function desktopLogin(c: Context) {
   });
   await setSessionCookie(c, session.token, session.expiresAt);
 
-  return c.redirect(localDashboardUrl);
+  return c.redirect(dashboardUrl);
 }
 
 /**

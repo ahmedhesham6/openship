@@ -4,6 +4,97 @@
     "save": "Save",
     "cancel": "Cancel"
   },
+  "appSource": {
+    "title": "Source",
+    "description": "This app deploys from a release — there's no repo to push to; updates ship as new versions.",
+    "sourceType": "Source",
+    "kindRelease": "Release",
+    "kindImage": "Container image",
+    "current": "Current version",
+    "latest": "Latest version",
+    "notChecked": "Not checked yet",
+    "upToDate": "Up to date",
+    "updateAvailable": "Update available",
+    "checkForUpdates": "Check for updates",
+    "checkFailed": "Couldn't check for updates",
+    "update": "Update",
+    "updateTo": "Update to {version}",
+    "updating": "Updating…",
+    "updateFailed": "Update failed",
+    "toastTitle": "Source"
+  },
+  "appSettings": {
+    "modeApp": "App settings",
+    "modeDeployment": "Deployment",
+    "saveChanges": "Save changes",
+    "saving": "Saving…",
+    "saved": "Settings saved",
+    "saveHint": "Save to store these changes — they apply the next time the app is deployed.",
+    "applyNow": "Apply now",
+    "applying": "Applying…",
+    "applied": "Applying changes",
+    "restartNote": "Apply now to restart the app with the new settings, or they take effect on the next deploy.",
+    "redeployNote": "Applying these changes recreates the app — you may need to re-authenticate its dashboard or CLI afterwards.",
+    "advancedShow": "Show advanced",
+    "advancedHide": "Hide advanced",
+    "secretSet": "Set — leave blank to keep the current value",
+    "loadError": "Couldn't load app settings.",
+    "saveFailed": "Couldn't save settings.",
+    "applyFailed": "Couldn't apply changes.",
+    "unmanaged": "This app has no configurable settings yet."
+  },
+  "appInstall": {
+    "install": "Install",
+    "installing": "Installing…",
+    "advanced": "Advanced deployment options",
+    "domainTitle": "Where should it live?",
+    "domainFree": "Free subdomain",
+    "domainFreeHint": "A free subdomain on {domain}",
+    "domainCustom": "Your own domain",
+    "domainCustomPlaceholder": "app.example.com",
+    "domainNone": "No public URL",
+    "domainNoneHint": "Internal only — no public address.",
+    "customRequired": "Enter your domain, or pick another option.",
+    "progressPreparing": "Preparing…",
+    "progressDeploying": "Deploying…",
+    "progressLive": "Your app is live",
+    "openApp": "Open app",
+    "goToApp": "Go to app",
+    "installFailed": "Install failed",
+    "viewDetails": "View technical details",
+    "back": "Back",
+    "destinationTitle": "Where to install",
+    "destinationHint": "Pick the server or cloud this app runs on.",
+    "destLocal": "This machine",
+    "destLocalDesc": "Run it here, on this Openship host.",
+    "mail": {
+      "title": "Set up mail",
+      "subtitle": "Deploy webmail on your own domain, or connect an existing mailbox.",
+      "chooseSelf": "Self-host a mail server",
+      "chooseSelfDesc": "Full SMTP/IMAP + webmail (iRedMail) on your server — we provision everything.",
+      "chooseConnect": "Connect an existing mailbox",
+      "chooseConnectDesc": "Deploy just the webmail UI, pointed at Amazon SES, Gmail, Fastmail, or any IMAP/SMTP backend.",
+      "provider": "Provider",
+      "presets": {
+        "custom": "Custom",
+        "ses": "Amazon SES",
+        "gmail": "Gmail",
+        "fastmail": "Fastmail"
+      },
+      "sesNote": "Amazon SES only sends mail — point IMAP at wherever your mail is stored and read.",
+      "sesSelfHostCta": "Don't have an inbox? Self-host one now and relay send through SES →",
+      "hostname": "Webmail address",
+      "hostnameHint": "The public URL people open to read their mail, e.g. mail.example.com.",
+      "imapHost": "IMAP host",
+      "imapPort": "IMAP port",
+      "smtpHost": "SMTP host",
+      "smtpPort": "SMTP port",
+      "deploy": "Deploy webmail",
+      "deploying": "Deploying…",
+      "hostnameRequired": "Enter the webmail address.",
+      "hostsRequired": "Enter both the IMAP and SMTP host."
+    }
+  },
   "advanced": {
     "projectInfo": {
       "title": "Project Info",
@@ -373,11 +464,26 @@
     "title": "Machine Power",
     "description": "Configure the machine power for your project.",
     "tiers": {
-      "lightweight": { "name": "Lightweight", "description": "Small apps and static sites" },
-      "standard": { "name": "Standard", "description": "Most web applications" },
-      "performance": { "name": "Performance", "description": "High-traffic applications" },
-      "enterprise": { "name": "Enterprise", "description": "Large scale production apps" },
-      "autoscale": { "name": "Auto Scale", "description": "Scales based on demand" }
+      "lightweight": {
+        "name": "Lightweight",
+        "description": "Small apps and static sites"
+      },
+      "standard": {
+        "name": "Standard",
+        "description": "Most web applications"
+      },
+      "performance": {
+        "name": "Performance",
+        "description": "High-traffic applications"
+      },
+      "enterprise": {
+        "name": "Enterprise",
+        "description": "Large scale production apps"
+      },
+      "autoscale": {
+        "name": "Auto Scale",
+        "description": "Scales based on demand"
+      }
     },
     "dynamic": "Dynamic",
     "custom": {
@@ -609,7 +715,8 @@
       "title": "Edit route",
       "internalOnly": "Internal only",
       "close": "Close",
-      "disabledWarning": "Service is disabled - routes are inactive until the service is re-enabled."
+      "disabledWarning": "Service is disabled - routes are inactive until the service is re-enabled.",
+      "save": "Save changes"
     },
     "menu": {
       "editRoute": "Edit route",
@@ -662,6 +769,8 @@
       "primaryUpdated": "Primary domain updated",
       "setPrimaryFailed": "Failed to set primary domain",
       "routeUpdateFailed": "Failed to update service route",
+      "publishing": "Publishing — deploying to install the edge and apply your domain…",
+      "publishFailed": "Domain saved, but the deploy didn't start — redeploy to publish it.",
       "enterPortShort": "Enter the port this domain should route to.",
       "noServicePort": "No service publishes port {port}. Add that port to a service first.",
       "enterCustom": "Enter a custom domain.",

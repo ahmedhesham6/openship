@@ -32,9 +32,25 @@ import {
 } from "@/lib/api";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { randomUUID } from "@/lib/random-uuid";
+import { AppLogo } from "@/components/AppLogo";
+
+/** Platforms whose Docker/Compose apps this flow can adopt — shown as faint
+ *  brand hints under the intro (decorative). Unknown marks fall back to a
+ *  neutral glyph inside AppLogo. */
+const MIGRATE_SOURCES = ["coolify", "dokku", "dokploy", "docker"] as const;
 
 /** A service that builds from source with no registry image can't migrate in v1. */
 const isBlocked = (s: DiscoveredService) => Boolean(s.build) && !s.image;
+
+/** The dockerized edge proxy (80/443). Openship's OpenResty replaces it, so it's
+ *  never imported — importing it would just replay the 80/443 conflict. */
+const isProxy = (s: DiscoveredService) => Boolean(s.proxyKind);
+
+/** Not importable as a workload: build-from-source, or the edge proxy. */
+const isExcluded = (s: DiscoveredService) => isBlocked(s) || isProxy(s);
+
+/** ":80/:443" label for a service's edge ports. */
+const edgePortLabel = (s: DiscoveredService) => (s.edgePorts ?? []).map((p) => `:${p}`).join("/");
 
 /** Unique selection key for a discovered service. Two different containers can
  *  share a `name` (e.g. a standalone `postgres` AND a compose `postgres`), so
@@ -75,6 +91,10 @@ interface MigrateItem {
 const hasNamedVolume = (s: DiscoveredService) =>
   s.volumes.some((v) => v.type === "volume" && v.source);
 
+/** Docker's built-in networks — always present, never migrated, so they're
+ *  noise in a per-project import summary. */
+const BUILTIN_NETWORKS = new Set(["host", "none", "bridge"]);
+
 /**
  * Migrate existing Docker deployment(s) into Openship: pick a server → inspect →
  * organise the discovered stack into one or more PROJECTS (tabs) → migrate.
@@ -98,6 +118,7 @@ export function ServerMigrationWizard({
   const [targetId, setTargetId] = useState<string | null>(serverId ?? null);
   const [serverName, setServerName] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanStatus, setScanStatus] = useState<string>("");
   const [stack, setStack] = useState<DiscoveredStack | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [killOriginals, setKillOriginals] = useState(false);
@@ -157,21 +178,27 @@ export function ServerMigrationWizard({
   const handleScan = async () => {
     if (!selectedId) return;
     setScanning(true);
+    setScanStatus("");
     setError(null);
     setStack(null);
     setProjects([]);
     try {
-      const res = await dockerMigrationApi.scan(selectedId);
-      setStack(res.stack);
-      if (!res.stack.adoptable) {
+      // Stream the inspect (SSE): step progress + no fixed timeout, so a slow
+      // SSH + docker inspect doesn't get aborted (the old plain POST hit the
+      // 15s client default through the same-origin proxy).
+      const scanned = await dockerMigrationApi.scanStream(selectedId, {
+        onProgress: setScanStatus,
+      });
+      setStack(scanned);
+      if (!scanned.adoptable) {
         setError(m.discover.nothing);
         return;
       }
       // Seed ONE project from the first group (compose preferred), pre-selecting
       // its migratable services. The user adds more project tabs for the rest.
-      const first = res.stack.groups.find((g) => g.services.some((s) => !isBlocked(s)));
+      const first = scanned.groups.find((g) => g.services.some((s) => !isExcluded(s)));
       if (first) {
-        const uids = first.services.filter((s) => !isBlocked(s)).map(svcUid);
+        const uids = first.services.filter((s) => !isExcluded(s)).map(svcUid);
         setProjects([
           {
             id: randomUUID(),
@@ -236,7 +263,7 @@ export function ServerMigrationWizard({
   const canBind = (key: string) => !active || active.services.size === 0 || active.bound === key;
 
   const toggleService = (svc: DiscoveredService, key: string) => {
-    if (!active || isBlocked(svc)) return;
+    if (!active || isExcluded(svc)) return;
     const uid = svcUid(svc);
     const owner = claimedBy.get(uid);
     if (owner && owner !== active.id) return; // claimed by another project
@@ -260,7 +287,7 @@ export function ServerMigrationWizard({
     const key = groupKey(group);
     if (!canBind(key)) return;
     const uids = group.services
-      .filter((s) => !isBlocked(s) && (claimedBy.get(svcUid(s)) ?? active.id) === active.id)
+      .filter((s) => !isExcluded(s) && (claimedBy.get(svcUid(s)) ?? active.id) === active.id)
       .map(svcUid);
     if (uids.length === 0) return;
     const allOn = uids.every((u) => active.services.has(u));
@@ -280,6 +307,10 @@ export function ServerMigrationWizard({
   // ── Derived ──────────────────────────────────────────────────────────────
   const adoptable = Boolean(stack?.adoptable);
   const sameServer = selectedId === targetId;
+  // Cross-server can't move a locally-built image (not in a registry) — the API
+  // blocks it with the exact service names. Surface the caveat up front when a
+  // built service exists and a different target is picked.
+  const crossServerBuiltSoon = !sameServer && Boolean(stack?.services.some((s) => Boolean(s.build)));
   const migratable = projects.filter((p) => p.services.size > 0 && p.name.trim().length > 0);
   const canMigrate =
     Boolean(selectedId) && Boolean(targetId) && migratable.length > 0 && !starting && !queue;
@@ -368,10 +399,22 @@ export function ServerMigrationWizard({
 
   const allDone = Boolean(queue) && completed.length >= (queue?.length ?? 0);
 
+  const lastProjectId = () => completed[completed.length - 1]?.projectId ?? run?.projectId;
+
   const openProject = () => {
-    const pid = completed[completed.length - 1]?.projectId ?? run?.projectId;
+    const pid = lastProjectId();
     close();
     if (pid) router.push(`/projects/${pid}`);
+  };
+
+  // The natural next step: assign a domain per exposed service (the migrated
+  // apps are pre-exposed, no domain yet) on the project's Domains tab. Adding a
+  // domain + redeploying is what ensures OpenResty (and reclaims 80/443 from the
+  // old proxy via the takeover modal).
+  const openDomains = () => {
+    const pid = lastProjectId();
+    close();
+    if (pid) router.push(`/projects/${pid}/domains`);
   };
 
   // Poll the current run while a migration is in flight; stop once terminal.
@@ -402,22 +445,27 @@ export function ServerMigrationWizard({
   // "nothing found" result all stay a compact, content-sized dialog.
   const expanded = adoptable || inProgress;
 
+  // The wide layout only exists to show the container table (scan/select). The
+  // progress phase has just a short step list — keep it in the compact,
+  // height-to-content shell so it doesn't float in a huge empty modal.
+  const wide = expanded && !inProgress;
+
   return (
     <Modal
       isOpen={isOpen}
       onClose={close}
-      width={expanded ? "1600px" : "560px"}
+      width={wide ? "1600px" : "560px"}
       maxWidth="95vw"
-      maxHeight={expanded ? "95vh" : "86vh"}
+      maxHeight={wide ? "95vh" : "86vh"}
       overflow="hidden"
       showCloseButton={false}
     >
-      <div className={`flex flex-col ${expanded ? "h-[95vh]" : "max-h-[86vh]"}`}>
+      <div className={`flex flex-col ${wide ? "h-[95vh]" : "max-h-[86vh]"}`}>
         {/* Header — compact single-line intro to keep it short. */}
-        <div className="shrink-0 flex items-center justify-between gap-4 px-6 py-3.5 border-b border-border/60">
+        <div className="shrink-0 flex items-center justify-between gap-4 px-6 py-4 border-b border-border/60 bg-muted/[0.18]">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="size-9 rounded-xl bg-blue-500/10 flex items-center justify-center shrink-0">
-              <Container className="size-4 text-blue-500" />
+            <div className="size-9 rounded-xl bg-primary/10 ring-1 ring-inset ring-primary/20 flex items-center justify-center shrink-0">
+              <Container className="size-[18px] text-primary" />
             </div>
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-foreground leading-tight">{m.wizard.title}</h2>
@@ -483,10 +531,17 @@ export function ServerMigrationWizard({
                     <button
                       type="button"
                       onClick={openProject}
+                      className="px-4 py-2.5 rounded-xl border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors"
+                    >
+                      {m.run.openProject}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openDomains}
                       className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors"
                     >
                       <ArrowRight className="size-4" />
-                      {m.run.openProject}
+                      {m.run.addDomains}
                     </button>
                   </div>
                 </>
@@ -565,7 +620,7 @@ export function ServerMigrationWizard({
             {/* Body */}
             <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
               {/* Idle + loading keep the illustration (loading just pulses it). */}
-              {!stack && !error && <EmptyHint scanning={scanning} />}
+              {!stack && !error && <EmptyHint scanning={scanning} status={scanStatus} />}
 
               {/* Scanned but nothing adoptable → stay compact, show a "nothing
                   found" state (not a giant empty modal). */}
@@ -648,6 +703,9 @@ export function ServerMigrationWizard({
                     >
                       {sameServer ? m.wizard.sameServer : m.run.downtimeNote}
                     </span>
+                    {crossServerBuiltSoon && (
+                      <span className="text-xs text-warning/90 w-full">{m.wizard.crossServerBuiltSoon}</span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <button
@@ -711,7 +769,7 @@ export function ServerMigrationWizard({
   );
 }
 
-function EmptyHint({ scanning }: { scanning?: boolean }) {
+function EmptyHint({ scanning, status }: { scanning?: boolean; status?: string }) {
   const { t } = useI18n();
   return (
     <div className="flex flex-col items-center justify-center text-center py-14 gap-4">
@@ -756,8 +814,18 @@ function EmptyHint({ scanning }: { scanning?: boolean }) {
         </svg>
       </div>
       <p className="max-w-sm text-sm text-muted-foreground">
-        {scanning ? t.migration.wizard.scanning : t.migration.wizard.intro}
+        {scanning ? (status || t.migration.wizard.scanning) : t.migration.wizard.intro}
       </p>
+      {!scanning && (
+        <div
+          className="mt-1 flex items-center gap-4 opacity-35 grayscale transition-opacity"
+          aria-hidden
+        >
+          {MIGRATE_SOURCES.map((slug) => (
+            <AppLogo key={slug} slug={slug} className="size-5" />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -813,7 +881,7 @@ function ServiceGroup({
   // The active project can bind to this group iff empty or already bound to it.
   const bindable = activeProject.services.size === 0 || activeProject.bound === key;
   const selectable = group.services.filter(
-    (s) => !isBlocked(s) && (claimedBy.get(svcUid(s)) ?? activeProject.id) === activeProject.id,
+    (s) => !isExcluded(s) && (claimedBy.get(svcUid(s)) ?? activeProject.id) === activeProject.id,
   );
   const allOn = selectable.length > 0 && selectable.every((s) => activeProject.services.has(svcUid(s)));
 
@@ -855,7 +923,7 @@ function ServiceGroup({
           </button>
         )}
       </div>
-      <div className="space-y-2">
+      <div className="grid grid-cols-1 gap-2 xl:grid-cols-2 items-stretch">
         {group.services.map((s) => {
           const owner = claimedBy.get(svcUid(s));
           const claimedElsewhere = owner && owner !== activeProject.id;
@@ -892,13 +960,14 @@ function ServiceRow({
   const { t } = useI18n();
   const m = t.migration.discover;
   const blocked = isBlocked(service);
-  const disabled = blocked || Boolean(claimedIn) || Boolean(bindHint);
+  const proxy = isProxy(service);
+  const disabled = blocked || proxy || Boolean(claimedIn) || Boolean(bindHint);
   const envCount = Object.keys(service.env).length;
   const source = service.build ? `${m.build}: ${service.dockerfile ?? service.build}` : service.image;
 
   return (
     <label
-      className={`group flex items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${
+      className={`group flex h-full items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${
         disabled
           ? "cursor-not-allowed border-border/50 opacity-55"
           : checked
@@ -954,17 +1023,27 @@ function ServiceRow({
             {m.buildBlocked}
           </p>
         )}
-        {!blocked && bindHint && (
+        {!blocked && proxy && (
+          <p className="mt-1 flex items-center gap-1.5 text-xs text-warning">
+            <AlertTriangle className="size-3.5 shrink-0" />
+            {interpolate(m.proxyExcluded, { ports: edgePortLabel(service) })}
+          </p>
+        )}
+        {!blocked && !proxy && (service.edgePorts?.length ?? 0) > 0 && (
+          <p className="mt-1 text-xs text-muted-foreground/80">
+            {interpolate(m.edgePortReserved, { ports: edgePortLabel(service) })}
+          </p>
+        )}
+        {!blocked && !proxy && bindHint && (
           <p className="mt-1 text-xs text-muted-foreground/80">{bindHint}</p>
         )}
       </div>
 
-      {/* Status pill (right) — borderless tint, matching the home status badges. */}
+      {/* Quiet status — no loud filled pill; running stays muted, only the
+          notable "stopped" state takes the on-brand warning tint. */}
       <span
-        className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
-          service.running
-            ? "bg-success-bg text-success"
-            : "bg-muted text-muted-foreground"
+        className={`mt-0.5 shrink-0 text-[11px] font-medium uppercase tracking-wide ${
+          service.running ? "text-muted-foreground/70" : "text-warning"
         }`}
       >
         {service.running ? m.running : m.stopped}
@@ -1005,6 +1084,13 @@ function ProjectSummary({
   );
   const envCount = picked.reduce((n, s) => n + Object.keys(s.env).length, 0);
   const warnings = Array.from(new Set(picked.flatMap((s) => s.warnings)));
+  // Networks actually attached to the selected services — scoped like every
+  // other stat here. Docker's built-in networks (host/none/bridge) are never
+  // migrated, and another compose's networks aren't part of this project, so
+  // both fall away naturally once we key off the picked services.
+  const usedNetworks = Array.from(new Set(picked.flatMap((s) => s.networks)))
+    .filter((n) => !BUILTIN_NETWORKS.has(n))
+    .sort();
   // Services carrying a named volume — the ones a same-server take-over/copy
   // choice applies to. Strategy is keyed per service (svcUid), matching how
   // handleMigrate reads it back.
@@ -1125,18 +1211,18 @@ function ProjectSummary({
         </section>
       )}
 
-      {stack.networks.length > 0 && (
+      {usedNetworks.length > 0 && (
         <section className="space-y-2">
           <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <Network className="size-4 text-muted-foreground" /> {m.networksTitle}
           </h4>
           <div className="flex flex-wrap gap-2">
-            {stack.networks.map((n) => (
+            {usedNetworks.map((n) => (
               <span
-                key={n.name}
+                key={n}
                 className="font-mono text-xs bg-muted/60 px-2.5 py-1 rounded-lg text-foreground/90"
               >
-                {n.name}
+                {n}
               </span>
             ))}
           </div>
@@ -1218,13 +1304,16 @@ function MigrationProgress({
       )}
 
       {allDone ? (
-        <div className="flex items-center gap-2 text-sm text-success rounded-xl bg-success-bg px-4 py-3">
-          <CheckCircle2 className="size-5 shrink-0" />
-          <span className="font-medium">
-            {queueTotal > 1
-              ? interpolate(m.run.allSucceeded, { n: String(queueTotal) })
-              : m.run.succeeded}
-          </span>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-sm text-success rounded-xl bg-success-bg px-4 py-3">
+            <CheckCircle2 className="size-5 shrink-0" />
+            <span className="font-medium">
+              {queueTotal > 1
+                ? interpolate(m.run.allSucceeded, { n: String(queueTotal) })
+                : m.run.succeeded}
+            </span>
+          </div>
+          <p className="px-1 text-xs leading-relaxed text-muted-foreground/80">{m.run.routeHint}</p>
         </div>
       ) : failed ? (
         <div className="flex items-start gap-2 text-sm text-destructive rounded-xl bg-destructive/10 px-4 py-3">

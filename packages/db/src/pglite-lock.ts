@@ -41,8 +41,8 @@ function lockPathFor(dataDir: string): string {
  * filesystem, so it still distinguishes two real machines mounting one data dir.
  * Falls back to hostname() only if the platform lookup fails.
  */
-let cachedMachineId: string | null = null;
-function machineId(): string {
+let cachedMachineId: { id: string; stable: boolean } | null = null;
+function machineId(): { id: string; stable: boolean } {
   if (cachedMachineId) return cachedMachineId;
   let id = "";
   try {
@@ -73,7 +73,17 @@ function machineId(): string {
   } catch {
     /* platform lookup failed — fall back to hostname below */
   }
-  cachedMachineId = (id || hostname()).trim();
+  // `stable` is true ONLY when a real platform UUID / machine-id was read. A
+  // hostname fallback is volatile (mDNS/DHCP name) — and, critically, this
+  // lookup can be flaky within ONE machine (e.g. the `ioreg` spawn timing out
+  // under load), so one run may read the UUID while another falls back to the
+  // hostname. Treating an unstable value as identity is exactly what caused the
+  // false "locked by a different machine" on a user's OWN box. We tag stability
+  // so the cross-machine hard-stop only fires when BOTH sides are trustworthy.
+  const trimmed = id.trim();
+  cachedMachineId = trimmed
+    ? { id: trimmed, stable: true }
+    : { id: hostname().trim(), stable: false };
   return cachedMachineId;
 }
 
@@ -153,11 +163,15 @@ function claim(lockPath: string): void {
   // wins even under a concurrent race — this is the exclusion primitive.
   const fd = openSync(lockPath, "wx");
   try {
+    const m = machineId();
     const record: LockRecord = {
       pid: process.pid,
       startedAt: Date.now(),
       host: hostname(),
-      machineId: machineId(),
+      // Only persist a STABLE machine UUID. If we couldn't read one, omit it —
+      // the lock then reads as "pre-fix" and gets same-machine pid-liveness
+      // treatment instead of a volatile hostname masquerading as identity.
+      ...(m.stable ? { machineId: m.id } : {}),
     };
     writeSync(fd, JSON.stringify(record));
   } finally {
@@ -217,7 +231,23 @@ export async function acquirePgliteLock(
     // probe a remote pid). A pre-fix lock has no machineId — assume this machine
     // and let the pid-liveness check below decide, rather than trusting the
     // volatile hostname that caused the false "different host" bug.
-    if (holder.machineId != null && holder.machineId !== machineId()) {
+    const current = machineId();
+    // A LEGACY lock (written before we stopped persisting unstable ids) stored a
+    // HOSTNAME as its machineId. A hostname is volatile (mDNS/DHCP flips
+    // "bluemac" ↔ "bluemac.local"), so comparing it to the current stable UUID
+    // falsely trips "different machine" on the box's OWN data dir. If the stored
+    // id matches a current-hostname variant, treat it as pre-fix and let the
+    // pid-liveness check below reclaim it.
+    const host = hostname().trim();
+    const short = host.split(".")[0];
+    const holderIsLegacyHostname =
+      holder.machineId != null && new Set([host, short, `${short}.local`]).has(holder.machineId);
+    if (
+      holder.machineId != null &&
+      !holderIsLegacyHostname &&
+      current.stable &&
+      holder.machineId !== current.id
+    ) {
       throw new Error(
         `The Openship database at ${dataDir} is locked by a process on a different machine ` +
           `(${holder.host}, pid ${holder.pid}). PGlite data directories cannot be shared ` +
@@ -303,7 +333,7 @@ export function releasePgliteLock(): void {
   if (
     holder !== "unreadable" &&
     holder.pid === process.pid &&
-    (holder.machineId == null || holder.machineId === machineId())
+    (holder.machineId == null || holder.machineId === machineId().id)
   ) {
     tryRemove(lockPath);
   }

@@ -1,4 +1,18 @@
 {
+  "header": {
+    "credits": "Credits",
+    "creditsSuffix": "of {limit}",
+    "overQuota": "Over quota",
+    "bandwidth": "Bandwidth",
+    "bandwidthNote": "combined in + out",
+    "build": "Build time",
+    "min": "min",
+    "capacity": "Capacity",
+    "workspaces": "workspaces",
+    "vcpus": "vCPU",
+    "ram": "RAM",
+    "diskCap": "disk"
+  },
   "tabs": {
     "overview": "Aperçu",
     "usage": "Utilisation",
@@ -48,7 +62,8 @@
     "currentPlan": "Forfait actuel",
     "contactSales": "Contacter le service commercial",
     "freeForever": "Gratuit à vie",
-    "upgrade": "Passer à la version supérieure"
+    "upgrade": "Passer à la version supérieure",
+    "comingSoon": "Bientôt disponible"
   },
   "topups": {
     "loadError": "Échec du chargement des packs de recharge",
@@ -121,10 +136,22 @@
       "empty": "Aucune utilisation dans la plage sélectionnée."
     },
     "resources": {
-      "cpu": { "label": "Temps CPU", "units": "vCPU-heures" },
-      "memory": { "label": "Mémoire", "units": "Go-heures" },
-      "disk": { "label": "E/S disque", "units": "Go" },
-      "network": { "label": "Réseau", "units": "Go" }
+      "cpu": {
+        "label": "Temps CPU",
+        "units": "vCPU-heures"
+      },
+      "memory": {
+        "label": "Mémoire",
+        "units": "Go-heures"
+      },
+      "disk": {
+        "label": "E/S disque",
+        "units": "Go"
+      },
+      "network": {
+        "label": "Réseau",
+        "units": "Go"
+      }
     },
     "toolbar": {
       "workspace": "Espace de travail",

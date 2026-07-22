@@ -13,8 +13,9 @@ import { env } from "../../config/env";
  * verify the request's IP and User-Agent against the values recorded
  * when the session was created. This catches exfiltrated tokens being
  * used from a different network/client, at the cost of breaking legit
- * users that switch carriers / VPN. Default is "off" — the standard
- * Better-Auth posture — with "warn" / "strict" available for hardening.
+ * users that switch carriers / VPN. Default is "warn" — matching
+ * env.ts — with "off" (permissive Better-Auth posture) and "strict"
+ * available as options.
  */
 export async function cloudSessionAuth(c: Context, next: Next) {
   const header = c.req.header("authorization");
@@ -36,9 +37,9 @@ export async function cloudSessionAuth(c: Context, next: Next) {
 
   // IP / User-Agent fingerprint check.
   //
-  // env.CLOUD_SESSION_PINNING:
-  //   off    → permissive (default Better-Auth posture)
-  //   warn   → log mismatches but allow
+  // env.CLOUD_SESSION_PINNING (env default: "warn"):
+  //   off    → permissive — skip fingerprint check (Better-Auth posture)
+  //   warn   → log mismatches but allow (runtime default from env.ts)
   //   strict → 401 on mismatch
   //
   // We compare against the session row's stored ipAddress / userAgent
@@ -78,11 +79,7 @@ export async function cloudSessionAuth(c: Context, next: Next) {
     }
   }
 
-  const [user] = await db
-    .select()
-    .from(schema.user)
-    .where(eq(schema.user.id, row.userId))
-    .limit(1);
+  const [user] = await db.select().from(schema.user).where(eq(schema.user.id, row.userId)).limit(1);
 
   if (!user) {
     return c.json({ error: "Unauthorized" }, 401);

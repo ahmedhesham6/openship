@@ -9,15 +9,21 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { APP_TEMPLATES, getAppTemplate, resolveServiceHostnameLabel, type AppConfigField } from "@repo/core";
+import { APP_TEMPLATES, getAppTemplate, getAppManagement, isAppAvailable, resolveServiceHostnameLabel, type AppConfigField } from "@repo/core";
 import { repos } from "@repo/db";
 import type { RequestContext } from "../../lib/request-context";
 import { createProject } from "../projects/project-crud.service";
 import { createService, setServiceEnvVars } from "../services/service.service";
 
-/** Strong random value for generated secrets (Convex INSTANCE_SECRET, DB passwords). */
+/**
+ * Strong random value for generated secrets (Convex INSTANCE_SECRET, DB
+ * passwords). 32 bytes → 64 hex chars: Convex self-hosted requires exactly a
+ * 32-byte hex INSTANCE_SECRET (like `openssl rand -hex 32`) and the backend
+ * exits 255 on boot with anything shorter — 24 bytes silently broke it. 32
+ * bytes is also fine (stronger) for every other generated secret.
+ */
 function generateSecret(): string {
-  return randomBytes(24).toString("hex");
+  return randomBytes(32).toString("hex");
 }
 
 /**
@@ -35,6 +41,10 @@ export function getAppCatalog() {
     category: t.category,
     tags: t.tags ?? [],
     flowHref: t.flowHref,
+    // How the installed app is managed (schema settings / custom href / none).
+    management: getAppManagement(t),
+    // Not installable this version → dashboard dims it + blocks the click.
+    comingSoon: !isAppAvailable(t.id),
     configFields: (t.configFields ?? [])
       .filter((f) => !f.generate)
       .map((f) => ({
@@ -65,6 +75,10 @@ export async function installApp(
 ): Promise<InstallAppResult> {
   const template = getAppTemplate(input.templateId);
   if (!template) throw new Error("unknown-app-template");
+
+  // Server-side gate: a "coming soon" app is dimmed in the UI, but also refuse
+  // it here so a direct API call can't install a not-yet-enabled app.
+  if (!isAppAvailable(template.id)) throw new Error("app-not-available");
 
   if (template.kind === "flow") {
     return { kind: "flow", flowHref: template.flowHref ?? "/" };

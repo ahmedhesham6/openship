@@ -74,6 +74,10 @@
     "disconnectAppBody": "Cela supprime l'entrée du compte OAuth Openship. L'installation de la GitHub App reste en place jusqu'à ce que vous la désinstalliez sur GitHub.",
     "cloudExplainer": "L'Openship GitHub App appartient à openship.io. Connectez votre instance à Openship Cloud pour utiliser des jetons d'installation à portée limitée pour cloner des dépôts privés (fonctionne pour les déploiements locaux ET distants).",
     "connectCloud": "Connecter Openship Cloud",
+    "noCloudTitle": "Cloner des dépôts privés sans le cloud",
+    "useSshPerServer": "Clé SSH par serveur",
+    "usePat": "Jeton d’accès",
+    "noCloudHint": "Configurez une clé SSH sur chaque serveur (Serveurs → GitHub), ou ajoutez un jeton d’accès personnel qui fonctionne pour les déploiements locaux et distants.",
     "linkExplainer": "Liez votre compte GitHub pour importer des dépôts, activer le déploiement automatique à chaque push et gérer les branches directement depuis le tableau de bord.",
     "connecting": "Connexion…",
     "connect": "Connecter GitHub",
@@ -108,9 +112,18 @@
     "noServers": "Aucun serveur configuré pour l'instant - ajoutez-en un depuis le sélecteur de déploiement.",
     "clearDefault": "Effacer la valeur par défaut (demander à chaque fois)",
     "targets": {
-      "local": { "label": "Cette machine", "desc": "Docker / runtime local" },
-      "server": { "label": "Mon serveur", "desc": "Un serveur SSH configuré" },
-      "cloud": { "label": "OpenShip Cloud", "desc": "Infrastructure cloud gérée" }
+      "local": {
+        "label": "Cette machine",
+        "desc": "Docker / runtime local"
+      },
+      "server": {
+        "label": "Mon serveur",
+        "desc": "Un serveur SSH configuré"
+      },
+      "cloud": {
+        "label": "OpenShip Cloud",
+        "desc": "Infrastructure cloud gérée"
+      }
     },
     "labelFor": {
       "yourServer": "votre serveur",
@@ -130,9 +143,18 @@
     "loading": "Chargement des préférences…",
     "intro": "Choisissez la stratégie de build par défaut pour les nouveaux déploiements. Des remplacements par projet sont disponibles dans les paramètres du projet.",
     "modes": {
-      "auto": { "label": "Auto", "desc": "Intelligent selon le framework" },
-      "server": { "label": "Serveur", "desc": "Build à distance" },
-      "local": { "label": "Local", "desc": "Build sur la machine" }
+      "auto": {
+        "label": "Auto",
+        "desc": "Intelligent selon le framework"
+      },
+      "server": {
+        "label": "Serveur",
+        "desc": "Build à distance"
+      },
+      "local": {
+        "label": "Local",
+        "desc": "Build sur la machine"
+      }
     },
     "toast": {
       "setTo": "Mode de build défini sur {mode}",
@@ -288,7 +310,31 @@
       "deleteBody": "Supprimer définitivement cet espace de travail et tout ce qu'il contient.",
       "leaveBody": "Quittez cet espace de travail — il vous faudra une nouvelle invitation pour revenir.",
       "deleteConfirm": "Supprimer cet espace de travail ? Ses projets, membres et paramètres seront supprimés pour tout le monde. Cette action est irréversible.",
-      "leaveConfirm": "Quitter cet espace de travail ? Vous perdrez l'accès jusqu'à ce que vous soyez réinvité."
+      "leaveConfirm": "Quitter cet espace de travail ? Vous perdrez l'accès jusqu'à ce que vous soyez réinvité.",
+      "manage": {
+        "title": "Gérer l'espace de travail",
+        "sectionBody": "Renommez cet espace de travail, mettez ses projets en pause ou supprimez-le.",
+        "nameLabel": "Nom de l'espace de travail",
+        "rename": "Renommer",
+        "projects": "Projets ({count})",
+        "noProjects": "Aucun projet dans cet espace de travail.",
+        "running": "En cours",
+        "stopped": "Arrêtés",
+        "pauseTitle": "Tout mettre en pause",
+        "pauseBody": "Arrêtez tous les projets mais conservez l'espace de travail — reprenez à tout moment.",
+        "pauseButton": "Arrêter tous les projets",
+        "deleteTitle": "Supprimer l'espace de travail",
+        "deleteBody": "Démantèle les {count} projets (conteneurs et routes) et supprime l'espace de travail. Les données des volumes restent récupérables. Irréversible.",
+        "confirmLabel": "Tapez « {name} » pour confirmer",
+        "deleting": "Suppression…",
+        "deletingProject": "Suppression de {name}…",
+        "deletingWorkspace": "Suppression de l'espace de travail…",
+        "toastRenamed": "Espace de travail renommé",
+        "toastRenameFailed": "Impossible de renommer l'espace de travail",
+        "toastPaused": "{count} projets arrêtés",
+        "toastPauseFailed": "Certains projets n'ont pas pu être arrêtés",
+        "toastProjectFailed": "Impossible de supprimer {name}"
+      }
     },
     "toast": {
       "teamNameRequired": "Le nom de l'équipe est requis",

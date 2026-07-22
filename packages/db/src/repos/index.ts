@@ -20,7 +20,7 @@ export {
   type CreatePatInput,
 } from "./personal-access-token.repo";
 export { createOAuthRepo } from "./oauth.repo";
-export { createProjectAppRepo, type ProjectApp, type NewProjectApp } from "./project-app.repo";
+export { createProjectGroupRepo, type ProjectGroup, type NewProjectGroup } from "./project-group.repo";
 export {
   createProjectRepo,
   type Project,
@@ -38,6 +38,12 @@ export {
 export { createDomainRepo, type Domain, type NewDomain } from "./domain.repo";
 export { createRouteRuleRepo, type RouteRule, type NewRouteRule } from "./route-rule.repo";
 export { createSystemNoticeRepo, type SystemNotice, type NewSystemNotice } from "./system-notice.repo";
+export { createUpdateStatusRepo, type UpdateStatus, type NewUpdateStatus } from "./update-status.repo";
+export {
+  createServerModuleStatusRepo,
+  type ServerModuleStatus,
+  type NewServerModuleStatus,
+} from "./server-module-status.repo";
 export {
   createCloudWebhookBindingRepo,
   type CloudWebhookBinding,
@@ -178,6 +184,11 @@ export {
   type ClaimAnniversaryGrantInput,
   type ClaimAnniversaryGrantResult,
 } from "./billing-anniversary-grant.repo";
+export {
+  createBillingUsageSnapshotRepo,
+  type UsageSnapshot,
+  type UsageSnapshotInput,
+} from "./billing-usage-snapshot.repo";
 
 // ─── Convenience: pre-bound repos using the singleton db ─────────────────────
 
@@ -187,12 +198,14 @@ import { createSessionRepo } from "./session.repo";
 import { createAccountRepo } from "./account.repo";
 import { createGitInstallationRepo } from "./git-installation.repo";
 import { createGithubInstallStateRepo } from "./github-install-state.repo";
-import { createProjectAppRepo } from "./project-app.repo";
+import { createProjectGroupRepo } from "./project-group.repo";
 import { createProjectRepo } from "./project.repo";
 import { createDeploymentRepo } from "./deployment.repo";
 import { createDomainRepo } from "./domain.repo";
 import { createRouteRuleRepo } from "./route-rule.repo";
 import { createSystemNoticeRepo } from "./system-notice.repo";
+import { createUpdateStatusRepo } from "./update-status.repo";
+import { createServerModuleStatusRepo } from "./server-module-status.repo";
 import { createCloudWebhookBindingRepo } from "./cloud-webhook-binding.repo";
 import { createGithubWebhookEventRepo } from "./github-webhook-event.repo";
 import { createServiceRepo } from "./service.repo";
@@ -235,6 +248,7 @@ import {
 } from "./notification.repo";
 import { createStripeTopupGrantRepo } from "./stripe-topup-grant.repo";
 import { createBillingAnniversaryGrantRepo } from "./billing-anniversary-grant.repo";
+import { createBillingUsageSnapshotRepo } from "./billing-usage-snapshot.repo";
 
 /**
  * Pre-bound repository instances using the singleton `db`.
@@ -251,12 +265,14 @@ export const repos = {
   account: createAccountRepo(db),
   gitInstallation: createGitInstallationRepo(db),
   githubInstallState: createGithubInstallStateRepo(db),
-  projectApp: createProjectAppRepo(db),
+  projectGroup: createProjectGroupRepo(db),
   project: createProjectRepo(db),
   deployment: createDeploymentRepo(db),
   domain: createDomainRepo(db),
   routeRule: createRouteRuleRepo(db),
   notice: createSystemNoticeRepo(db),
+  updateStatus: createUpdateStatusRepo(db),
+  serverModuleStatus: createServerModuleStatusRepo(db),
   cloudWebhookBinding: createCloudWebhookBindingRepo(db),
   githubWebhookEvent: createGithubWebhookEventRepo(db),
   service: createServiceRepo(db),
@@ -295,4 +311,5 @@ export const repos = {
   notificationDelivery: createNotificationDeliveryRepo(db),
   stripeTopupGrant: createStripeTopupGrantRepo(db),
   billingAnniversaryGrant: createBillingAnniversaryGrantRepo(db),
+  billingUsageSnapshot: createBillingUsageSnapshotRepo(db),
 } as const;

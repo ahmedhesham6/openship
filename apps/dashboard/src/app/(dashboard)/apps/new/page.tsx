@@ -1,21 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, ArrowRight, Loader2, Search } from "lucide-react";
 import { appsApi, type AppCatalogEntry } from "@/lib/api";
 import { AppLogo } from "@/components/AppLogo";
-import { encodeProjectSlug } from "@/utils/repoSlug";
 import { useI18n } from "@/components/i18n-provider";
 import { PageContainer } from "@/components/ui/PageContainer";
-import { useToast } from "@/context/ToastContext";
 
 /**
- * Create App — the one-click catalog. Clicking an app installs it (creates the
- * repo-less services project + services + secrets) and drops the user on the
- * pre-filled deploy wizard, where they just press Deploy. No config form: apps
- * carry their own defaults; secrets are generated server-side. Flow apps (mail)
- * hand off to their own wizard.
+ * Create App — the one-click catalog. Clicking an app opens its clean, business-
+ * only install wizard (/apps/new/<id>), which creates the project on confirm and
+ * wraps the deploy. Flow apps (mail) hand off to their own wizard.
  */
 
 // Stable display order for the category tab bar; only categories actually
@@ -25,12 +21,13 @@ const CATEGORY_ORDER = ["backend", "database", "cms", "analytics", "automation",
 export default function NewAppPage() {
   const { t } = useI18n();
   const router = useRouter();
-  const { showToast } = useToast();
+  const searchParams = useSearchParams();
   const ap = t.dashboard.pages.apps;
 
   const [catalog, setCatalog] = useState<AppCatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [installingId, setInstallingId] = useState<string | null>(null);
+  const [installingId] = useState<string | null>(null);
+  const autoStarted = useRef(false);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string>("all");
 
@@ -59,27 +56,36 @@ export default function NewAppPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const install = async (app: AppCatalogEntry) => {
-    if (installingId) return;
+  const install = (app: AppCatalogEntry) => {
+    if (app.comingSoon) return;
+    // Flow apps (mail) own a bespoke wizard.
     if (app.kind === "flow" && app.flowHref) {
       router.push(app.flowHref);
       return;
     }
-    setInstallingId(app.id);
-    try {
-      const res = await appsApi.install({ templateId: app.id });
-      const data = res.data;
-      if (data.kind === "flow") {
-        router.push(data.flowHref);
-        return;
-      }
-      // Land on the pre-filled deploy wizard for the freshly-created app project.
-      router.push(`/deploy/${encodeProjectSlug(data.projectId)}`);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : "Install failed", "error");
-      setInstallingId(null);
-    }
+    // Template apps → the clean, business-only install wizard. It creates the
+    // project on confirm and wraps the deploy; the technical /deploy wizard is
+    // its "Advanced" path. No install-on-click (avoids orphaned projects).
+    router.push(`/apps/new/${app.id}`);
   };
+
+  // Deep-link: /apps/new?app=<id> (from the Apps page "popular" / "you can also
+  // deploy" tiles) lands the user straight on that app's flow — install →
+  // deploy wizard, or a flow app's own wizard — instead of the generic catalog.
+  // Fires once, after the catalog loads; unknown/coming-soon ids just fall
+  // through to the catalog.
+  useEffect(() => {
+    if (autoStarted.current || loading) return;
+    const wanted = searchParams.get("app");
+    if (!wanted) return;
+    const entry = catalog.find((a) => a.id === wanted);
+    if (entry && !entry.comingSoon) {
+      autoStarted.current = true;
+      void install(entry);
+    }
+    // install is stable enough for this one-shot; the ref guards re-fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, catalog, searchParams]);
 
   return (
     <PageContainer outerClassName="pb-20">
@@ -150,9 +156,14 @@ export default function NewAppPage() {
               <button
                 key={app.id}
                 type="button"
-                disabled={!!installingId}
+                disabled={!!installingId || app.comingSoon}
+                aria-disabled={app.comingSoon}
                 onClick={() => install(app)}
-                className="group flex items-start gap-3 rounded-2xl border border-border/50 bg-card p-5 text-left transition-all hover:border-primary/40 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                className={`group flex items-start gap-3 rounded-2xl border border-border/50 bg-card p-5 text-left transition-all ${
+                  app.comingSoon
+                    ? "cursor-not-allowed opacity-45 saturate-50"
+                    : "hover:border-primary/40 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+                }`}
               >
                 <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted/60">
                   <AppLogo appId={app.id} className="size-[22px]" />
@@ -160,7 +171,11 @@ export default function NewAppPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium text-foreground">{app.name}</span>
-                    {busy ? (
+                    {app.comingSoon ? (
+                      <span className="shrink-0 rounded-full border border-border/60 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        {ap.comingSoon}
+                      </span>
+                    ) : busy ? (
                       <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
                     ) : (
                       <ArrowRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-foreground" />

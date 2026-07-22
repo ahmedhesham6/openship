@@ -92,6 +92,13 @@ const envSchema = z.object({
   /* ---------- Mode ---------- */
   CLOUD_MODE: envBool("false"),
   /**
+   * Openship Cloud only: hard cap on projects per user (a cloud org maps 1:1
+   * to its owning SaaS user, so per-org == per-user here). Enforced at project
+   * create + ensure. Self-hosted ignores this and uses the high
+   * SYSTEM.PROJECTS.MAX_PER_USER safety cap instead. Default 2 for now.
+   */
+  CLOUD_MAX_PROJECTS_PER_USER: z.coerce.number().int().min(1).default(2),
+  /**
    * Deployment mode - determines the runtime + infrastructure combination:
     *   - "docker"  (default) → Docker runtime + OpenResty routing/SSL (self-hosted)
     *   - "bare"              → Process runtime + OpenResty routing/SSL (self-hosted)
@@ -119,9 +126,9 @@ const envSchema = z.object({
    * Cloud-session IP/UA pinning policy. Applied by cloudSessionAuth
    * middleware when a local instance presents a cloud_session_token.
    *
-   *   - "off"  (default) → log mismatches as warnings, allow the request.
+   *   - "off"            → log mismatches as warnings, allow the request.
    *                        Friendly to mobile carriers/VPN switches.
-   *   - "warn"           → same as "off" but also emits an audit log
+   *   - "warn" (default) → same as "off" but also emits an audit log
    *                        entry per mismatch (for SOC review).
    *   - "strict"         → 401 on IP OR User-Agent mismatch with the
    *                        IP/UA stored when the session was created.
@@ -200,20 +207,20 @@ const envSchema = z.object({
   OBLIEN_CLIENT_ID: z.string().optional(),
   OBLIEN_CLIENT_SECRET: z.string().optional(),
   /**
-   * Shared secret returned by Oblien when we register a webhook via
-   * `webhooks.create`. Used to verify the `X-Webhook-Signature` HMAC on
-   * inbound deliveries to /api/billing/oblien-webhook. Missing → handler
-   * rejects every request (CLOUD_MODE only — self-hosted never registers
-   * Oblien webhooks).
+   * Shared secret we hand Oblien when registering our webhook via
+   * `webhooks.create` (see `ensureOblienWebhook`). Oblien signs each delivery
+   * as `X-Webhook-Signature = HMAC-SHA256(secret, rawBody)` (hex, body only —
+   * no timestamp). The receiver at /api/billing/oblien-webhook verifies it in
+   * constant time; missing secret → 503 (never silently accept unverified
+   * traffic). CLOUD_MODE only — self-hosted never registers Oblien webhooks.
    */
   OBLIEN_WEBHOOK_SECRET: z.string().optional(),
 
   /* ---------- Backup destinations ---------- */
   /**
-   * Allow `kind: 'local'` backup destinations. Defaults OFF in CLOUD_MODE
-   * (the SaaS would otherwise expose its multi-tenant filesystem to any
-   * authenticated user), defaults ON for self-hosted single-operator
-   * installs where the API process owns the host.
+   * Allow `kind: 'local'` backup destinations. Defaults OFF everywhere
+   * (including self-hosted single-operator installs) - the operator must
+   * explicitly opt in with BACKUP_ALLOW_LOCAL_DESTINATION=true.
    */
   BACKUP_ALLOW_LOCAL_DESTINATION: envBool(),
   /**
@@ -484,12 +491,14 @@ function validateCookieDomain(raw: string): void {
 if (!env.CLOUD_MODE) {
   // GITHUB_APP_SLUG is intentionally NOT in this list — it IS consumed
   // on self-hosted (by getInstallUrl in github.auth.ts to build the
-  // install link the dashboard shows). The other vars are App-private
-  // credentials that have moved to api.openship.io exclusively.
+  // install link the dashboard shows). GITHUB_WEBHOOK_SECRET is also NOT
+  // listed: it's no longer REQUIRED (webhooks now mint + persist a
+  // per-project signing secret), but it stays a valid LEGACY FALLBACK the
+  // webhook verifier still accepts — so we don't nag operators to remove it.
+  // The vars below ARE App-private credentials that moved to api.openship.io.
   const stale = [
     env.GITHUB_APP_ID && "GITHUB_APP_ID",
     (env.GITHUB_PRIVATE_KEY || env.GITHUB_PRIVATE_KEY_BASE64) && "GITHUB_PRIVATE_KEY",
-    env.GITHUB_WEBHOOK_SECRET && "GITHUB_WEBHOOK_SECRET",
   ].filter(Boolean);
   if (stale.length > 0) {
     console.warn(

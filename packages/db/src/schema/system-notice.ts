@@ -23,6 +23,14 @@ export const systemNotice = pgTable(
     /** Optional call-to-action (e.g. a status-page link). */
     actionLabel: text("action_label"),
     actionUrl: text("action_url"),
+    /**
+     * Optional scope. `platform` (default/null) = a global announcement; `app`/
+     * `project`/`mail` + `targetId` scope the notice to one entity so the
+     * operator can push e.g. "n8n has a critical CVE — update" to just that app.
+     * Mirrors AdvisoryTarget in @repo/core.
+     */
+    targetType: text("target_type"),
+    targetId: text("target_id"),
     /** Operator toggle — only active notices are served. */
     active: boolean("active").notNull().default(true),
     /** Optional display window; a null bound is open-ended. A notice is served

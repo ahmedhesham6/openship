@@ -341,6 +341,13 @@ export interface MultiServiceDeployConfig {
   namespaceVolumes: boolean;
   command?: string;
   restart?: string;
+  /**
+   * Force a fresh `docker pull` of the image tag even when a local copy exists.
+   * Set only for the "update" trigger — a normal deploy/redeploy stays
+   * pull-if-missing so it never surprise-bumps a `:latest` app or defeats the
+   * unchanged-image carry-forward.
+   */
+  forcePull?: boolean;
   /** Extended compose fields (healthcheck, …). Docker honors them; runtimes
    *  that can't (cloud) warn-and-drop. See ComposeAdvanced in @repo/core. */
   advanced?: ComposeAdvanced;
@@ -364,6 +371,13 @@ export interface MultiServiceDeployResult {
   status: string;
   ip?: string;
   hostPort?: number;
+  /**
+   * Content-addressable image digest actually running (`repo@sha256:…`), read
+   * from the image's RepoDigests after create. The anchor the update scanner
+   * uses to detect a moved mutable tag. Undefined when unresolvable (e.g. a
+   * locally-built image with no registry digest).
+   */
+  imageDigest?: string;
 }
 
 export interface MultiServiceRuntimeAdapter extends RuntimeAdapter {

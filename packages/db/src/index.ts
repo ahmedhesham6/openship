@@ -2,7 +2,12 @@
 export { db, getDriver, getPgPool, closeDb, type Database, type Driver } from "./client";
 
 // ─── Advisory locking (cross-process serialization) ──────────────────────────
-export { withAdvisoryLock, hashStringToInt } from "./advisory-lock";
+export {
+  withAdvisoryLock,
+  tryAcquireAdvisoryLock,
+  hashStringToInt,
+  type AdvisoryLockHandle,
+} from "./advisory-lock";
 
 // ─── Schema (table definitions) ──────────────────────────────────────────────
 export * as schema from "./schema";
@@ -32,7 +37,7 @@ export {
   createSessionRepo,
   createAccountRepo,
   createGitInstallationRepo,
-  createProjectAppRepo,
+  createProjectGroupRepo,
   createProjectRepo,
   createDeploymentRepo,
   createDomainRepo,
@@ -57,8 +62,8 @@ export {
   type Account,
   type GitInstallation,
   type NewGitInstallation,
-  type ProjectApp,
-  type NewProjectApp,
+  type ProjectGroup,
+  type NewProjectGroup,
   type Project,
   type NewProject,
   type EnvVar,
@@ -136,6 +141,9 @@ export {
   type NotificationDelivery,
   type ChannelKind,
   type DeliveryStatus,
+  createUpdateStatusRepo,
+  type UpdateStatus,
+  type NewUpdateStatus,
 } from "./repos";
 
 // ─── Drizzle operators (re-exported for convenience) ─────────────────────────

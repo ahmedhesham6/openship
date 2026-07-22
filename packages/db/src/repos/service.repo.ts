@@ -631,6 +631,7 @@ export function createServiceRepo(db: Database) {
             containerId: data.containerId ?? null,
             status: data.status,
             imageRef: data.imageRef ?? null,
+            imageDigest: data.imageDigest ?? null,
             hostPort: data.hostPort ?? null,
             ip: data.ip ?? null,
             reason: data.reason ?? null,

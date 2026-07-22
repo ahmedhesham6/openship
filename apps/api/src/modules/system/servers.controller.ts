@@ -44,7 +44,11 @@ export async function listServers(c: Context) {
   const ctx = getRequestContext(c);
   const all = await repos.server.listByOrganization(ctx.organizationId);
   await primeGeo();
-  return c.json(all.map(serializeServer));
+  // Projects currently deployed to each server (active deployment → meta.serverId).
+  const projectCounts = await repos.project
+    .countActiveByServer(ctx.organizationId)
+    .catch(() => ({} as Record<string, number>));
+  return c.json(all.map((s) => ({ ...serializeServer(s), projectCount: projectCounts[s.id] ?? 0 })));
 }
 
 /** GET /servers/:id - get a single server. */

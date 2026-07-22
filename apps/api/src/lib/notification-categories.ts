@@ -189,7 +189,11 @@ const EVENT_TYPE_TO_CATEGORY: Record<string, string> = {
   // Billing
   "billing.payment_failed": "billing.alert",
   "billing.invoice_overdue": "billing.alert",
+  "billing.credit_exhausted": "billing.alert",
+  "billing.credit_restored": "billing.alert",
+  "billing.credit_low": "quota.warning",
   "quota.threshold_reached": "quota.warning",
+  "quota.threshold_fired": "quota.warning",
 };
 
 export function categoryForEventType(eventType: string): string | undefined {

@@ -22,7 +22,7 @@ import { service } from "./service";
  * table remains the deployable environment instance that owns deployments,
  * domains, env vars, logs, analytics, and runtime settings.
  */
-export const projectApp = pgTable("project_app", {
+export const projectGroup = pgTable("project_app", {
   id: text("id").primaryKey(), // "app_..."
   /** Org that owns this app — THE access primitive. Creator info lives
    *  in audit_event (event_type='project.create'). */
@@ -67,9 +67,9 @@ export const project = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
-    appId: text("app_id")
+    groupId: text("app_id")
       .notNull()
-      .references(() => projectApp.id, { onDelete: "cascade" }),
+      .references(() => projectGroup.id, { onDelete: "cascade" }),
 
     /** Display name (e.g. "My Next App") */
     name: text("name").notNull(),
@@ -90,7 +90,7 @@ export const project = pgTable(
      * (Convex, WordPress, webmail, …) rather than as a user code deployment.
      * Purely a classification: it moves the project to the Apps tab and shows a
      * catalog logo/badge — the project internals are unchanged. Distinct from
-     * `appId`, which is the FK to the project_app grouping row.
+     * `groupId`, which is the FK to the project_app grouping row.
      */
     isApp: boolean("is_app").notNull().default(false),
     /** Catalog template id this app was installed from (e.g. "convex", "mail-webmail"). */
@@ -327,7 +327,7 @@ export const project = pgTable(
   },
   (table) => [
     uniqueIndex("uq_project_app_environment_slug_active")
-      .on(table.appId, table.environmentSlug)
+      .on(table.groupId, table.environmentSlug)
       .where(sql`${table.deletedAt} IS NULL`),
     // One local project per Oblien workspace. Two project rows pointing
     // at the same workspace would race on deploy + confuse drift

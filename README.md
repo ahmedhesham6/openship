@@ -61,6 +61,8 @@ docker compose up -d
 
 Or grab the desktop app (`openship install`, or download from [openship.io](https://openship.io)).
 
+**Which setup?** Working solo → use the **desktop app**: the control plane runs on your machine and drives your servers over SSH, with nothing of Openship exposed publicly. Running for a team, need always-on / remote access / push-to-deploy → **self-host on a server** (`openship up --public-url …`). Full guide, server install, and the CLI command reference: **[docs/installation.md](docs/installation.md)**.
+
 ---
 
 ## What It Does

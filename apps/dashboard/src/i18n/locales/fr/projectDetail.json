@@ -130,7 +130,10 @@
         "mail": "Mail et SMTP",
         "runtime": "Environnements d'exécution",
         "other": "Autre"
-      }
+      },
+      "cloudConnectTitle": "Connecter Openship Cloud",
+      "cloudConnectBody": "Liez cette instance à Openship Cloud pour parcourir et ajouter des images cloud gérées. Vous pouvez toujours ajouter n'importe quelle image manuellement depuis Images locales.",
+      "cloudConnectButton": "Se connecter à Openship Cloud"
     },
     "detail": {
       "tabs": {
@@ -203,7 +206,11 @@
         "serviceDeleted": "Service supprimé",
         "deleteFailed": "Échec de la suppression du service",
         "backupRunFailed": "Échec de l'exécution de la sauvegarde"
-      }
+      },
+      "internalAddress": "Adresse interne",
+      "internalAddressHint": "Les autres services atteignent celui-ci à cette adresse.",
+      "currentIp": "IP actuelle",
+      "currentIpHint": "Change au redémarrage — utilisez plutôt l'adresse interne ci-dessus."
     },
     "settingsForm": {
       "name": "Nom",

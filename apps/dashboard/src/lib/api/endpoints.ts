@@ -56,6 +56,7 @@ export const endpoints = {
   apps: {
     catalog: "apps/catalog",
     install: "apps",
+    settings: (projectId: string | number) => `projects/${projectId}/app-settings`,
   },
 
   /* ---------------------------------------------------------------- */
@@ -221,6 +222,8 @@ export const endpoints = {
   system: {
     browse: "system/browse",
     settings: "system/settings",
+    emailSettings: "system/settings/email",
+    emailSettingsTest: "system/settings/email/test",
     onboarding: "system/onboarding",
     onboardingTestConnection: "system/onboarding/test-connection",
     testConnection: "system/test-connection",
@@ -235,6 +238,11 @@ export const endpoints = {
     server: (id: string) => `system/servers/${id}`,
     serverReachability: (id: string) => `system/servers/${id}/reachability`,
     serverRateLimit: (id: string) => `system/servers/${id}/rate-limit`,
+    // Native-module versioning + migration (OpenResty, …)
+    serverModules: (id: string) => `system/servers/${id}/modules`,
+    serverModulesScan: (id: string) => `system/servers/${id}/modules/scan`,
+    serverModuleApply: (id: string, module: string) =>
+      `system/servers/${id}/modules/${module}/apply`,
     // Per-server GitHub auth (self-hosted)
     serverGithub: (id: string) => `system/servers/${id}/github`,
     serverGithubConnect: (id: string) => `system/servers/${id}/github/connect`,
@@ -304,6 +312,8 @@ export const endpoints = {
         `mail/admin/${encodeURIComponent(serverId)}/stats`,
       dnsScan: (serverId: string) =>
         `mail/admin/${encodeURIComponent(serverId)}/dns-scan`,
+      relay: (serverId: string) =>
+        `mail/admin/${encodeURIComponent(serverId)}/relay`,
       backupPolicy: (serverId: string) =>
         `mail/admin/${encodeURIComponent(serverId)}/backup-policy`,
       backupRuns: (serverId: string) =>
@@ -320,6 +330,7 @@ export const endpoints = {
     webmail: {
       targets: "mail/webmail/targets",
       deployProject: "mail/webmail/deploy-project",
+      deployExternal: "mail/webmail/deploy-external",
     },
   },
 
@@ -335,6 +346,7 @@ export const endpoints = {
   /* ---------------------------------------------------------------- */
   dockerMigration: {
     scan: "migration/scan",
+    scanStream: "migration/scan/stream",
     adopt: "migration/adopt",
     preview: "migration/preview",
     migrate: "migration/migrate",
@@ -367,6 +379,16 @@ export const endpoints = {
     deliveries: "notifications/deliveries",
     unseenCount: "notifications/deliveries/unseen-count",
     markSeen: (id: string) => `notifications/deliveries/${id}/seen`,
+  },
+
+  /* ---------------------------------------------------------------- */
+  /*  Updates (unified update scan + apply)                           */
+  /* ---------------------------------------------------------------- */
+  updates: {
+    list: "updates",
+    behind: "updates?behind=1",
+    scan: "updates/scan",
+    apply: (projectId: string) => `updates/${projectId}/apply`,
   },
 
   /* ---------------------------------------------------------------- */
@@ -407,6 +429,7 @@ export const endpoints = {
     update: (id: string) => `backup-destinations/${id}`,
     delete: (id: string) => `backup-destinations/${id}`,
     preflight: (id: string) => `backup-destinations/${id}/preflight`,
+    preflightDraft: "backup-destinations/preflight",
     usage: (id: string) => `backup-destinations/${id}/usage`,
   },
 
@@ -414,6 +437,7 @@ export const endpoints = {
   /*  Billing (Stripe-backed cloud billing — SaaS + local-proxy)      */
   /* ---------------------------------------------------------------- */
   billing: {
+    plans: "billing/plans",
     state: "billing/state",
     usage: "billing/usage",
     topupPacks: "billing/topup-packs",

@@ -1,4 +1,4 @@
-import { eq, and, desc, inArray, isNull, ne, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
 import { deployment, buildSession } from "../schema";
@@ -484,6 +484,26 @@ export function createDeploymentRepo(db: Database) {
         where: eq(buildSession.deploymentId, deploymentId),
         orderBy: [desc(buildSession.createdAt)],
       });
+    },
+
+    /**
+     * Total build time (ms) an org consumed in a window — sum of build-session
+     * `durationMs` for the org's deployments started in [from, to]. Openship's
+     * own metric (Oblien does not meter build separately). Bounded by period.
+     */
+    async sumBuildMillisForOrg(organizationId: string, from: Date, to: Date): Promise<number> {
+      const [row] = await db
+        .select({ total: sql<number>`coalesce(sum(${buildSession.durationMs}), 0)` })
+        .from(buildSession)
+        .innerJoin(deployment, eq(buildSession.deploymentId, deployment.id))
+        .where(
+          and(
+            eq(deployment.organizationId, organizationId),
+            gte(buildSession.startedAt, from),
+            lte(buildSession.startedAt, to),
+          ),
+        );
+      return Number(row?.total ?? 0);
     },
 
     async updateBuildSession(id: string, data: Partial<NewBuildSession>) {

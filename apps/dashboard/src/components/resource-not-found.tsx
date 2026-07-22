@@ -63,6 +63,12 @@ export function ResourceNotFound({
   );
 }
 
+// Only navigate for an internal ("/…", not protocol-relative "//") or explicit
+// http(s) href — so a future dynamic caller can't smuggle a javascript:/data:
+// URL through Next <Link>. Every current caller passes a constant; this is
+// defense-in-depth. An unsafe href falls back to a non-navigating button.
+const SAFE_HREF = /^(\/(?!\/)|https?:\/\/)/i;
+
 function ActionButton({ action }: { action: ResourceNotFoundAction }) {
   const className = cn(
     "inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-medium transition-colors",
@@ -70,7 +76,7 @@ function ActionButton({ action }: { action: ResourceNotFoundAction }) {
       ? "bg-muted/50 text-foreground hover:bg-muted"
       : "bg-primary text-primary-foreground hover:bg-primary/90",
   );
-  if (action.href) {
+  if (action.href && SAFE_HREF.test(action.href)) {
     return (
       <Link href={action.href} className={className}>
         {action.icon}

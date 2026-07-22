@@ -11,7 +11,7 @@
  */
 
 import { repos, type BackupDestination } from "@repo/db";
-import { type DestinationKind } from "@repo/adapters";
+import { type DestinationKind, type BackupDestinationRow } from "@repo/adapters";
 import crypto from "node:crypto";
 import path from "node:path";
 import { realpath } from "node:fs/promises";
@@ -19,7 +19,7 @@ import { encryptSecretField } from "../../lib/credential-encryption";
 import { assertResourceInOrg } from "../../lib/controller-helpers";
 import type { RequestContext } from "../../lib/request-context";
 import { env } from "../../config/env";
-import { toAdapterRow } from "./hydrate-server";
+import { toAdapterRow, hydrateServerAdapterRow } from "./hydrate-server";
 import { safeErrorMessage, type ConnectivityCode } from "@repo/core";
 import { runConnectivityCheck } from "../../lib/connectivity";
 import "../../lib/connectivity-checks"; // registers the backup-destination check
@@ -460,6 +460,74 @@ export async function preflightDestination(
     const reason = safeErrorMessage(err);
     await repos.backupDestination.setLastVerified(id, false, reason);
     return { ok: false, reason };
+  }
+}
+
+/**
+ * Preflight an UNSAVED destination — the "Test connection" button in the create/
+ * edit modal. Builds an ephemeral adapter row from the submitted input (nothing
+ * is persisted) and runs the same probe as {@link preflightDestination}. When
+ * editing (`existingId` set), secret fields left blank fall back to the stored
+ * ciphertext so a user can test without re-typing credentials.
+ */
+export async function preflightDraft(
+  ctx: RequestContext,
+  input: CreateDestinationInput,
+  existingId?: string,
+): Promise<{ ok: boolean; reason?: string; code?: ConnectivityCode }> {
+  let stored: BackupDestination | null = null;
+  if (existingId) {
+    stored = (await repos.backupDestination.findById(existingId)) ?? null;
+    assertResourceInOrg(stored, "Destination", ctx.organizationId, existingId);
+  }
+
+  // Non-secret: prefer the submitted value, else the stored one. Blank ("") is
+  // treated as "not provided" so it never blanks a stored field mid-test.
+  const val = (v: string | null | undefined, kept: string | null): string | null =>
+    v != null && v !== "" ? v : kept;
+  // Secret: a typed value is encrypted now; blank keeps the stored ciphertext.
+  const enc = (v: string | null | undefined, kept: string | null): string | null =>
+    v ? encryptSecretField(v) : kept;
+
+  let adapterRow: BackupDestinationRow;
+  try {
+    if (input.kind === "openship_server") {
+      const serverId = input.serverId ?? stored?.serverId ?? null;
+      if (!serverId) return { ok: false, reason: "Select a server to test" };
+      adapterRow = await hydrateServerAdapterRow({
+        id: existingId ?? "bkd_draft",
+        organizationId: ctx.organizationId,
+        name: input.name || "draft",
+        pathPrefix: val(input.pathPrefix, stored?.pathPrefix ?? null),
+        serverId,
+      });
+    } else {
+      adapterRow = {
+        id: existingId ?? "bkd_draft",
+        organizationId: ctx.organizationId,
+        name: input.name || "draft",
+        kind: input.kind,
+        endpoint: val(input.endpoint, stored?.endpoint ?? null),
+        region: val(input.region, stored?.region ?? null),
+        bucket: val(input.bucket, stored?.bucket ?? null),
+        pathPrefix: val(input.pathPrefix, stored?.pathPrefix ?? null),
+        sshHost: val(input.sshHost, stored?.sshHost ?? null),
+        sshPort: input.sshPort ?? stored?.sshPort ?? null,
+        sshUser: val(input.sshUser, stored?.sshUser ?? null),
+        serverId: null,
+        accessKeyIdEnc: enc(input.accessKeyId, stored?.accessKeyIdEnc ?? null),
+        secretAccessKeyEnc: enc(input.secretAccessKey, stored?.secretAccessKeyEnc ?? null),
+        sftpPasswordEnc: enc(input.sftpPassword, stored?.sftpPasswordEnc ?? null),
+        sftpPrivateKeyEnc: enc(input.sftpPrivateKey, stored?.sftpPrivateKeyEnc ?? null),
+        sftpKeyPassphraseEnc: enc(input.sftpKeyPassphrase, stored?.sftpKeyPassphraseEnc ?? null),
+      };
+    }
+    const result = await runConnectivityCheck("backup-destination", adapterRow);
+    return result.ok
+      ? { ok: true, code: result.code }
+      : { ok: false, reason: result.message, code: result.code };
+  } catch (err) {
+    return { ok: false, reason: safeErrorMessage(err) };
   }
 }
 

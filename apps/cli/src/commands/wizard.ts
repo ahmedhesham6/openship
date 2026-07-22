@@ -18,6 +18,9 @@ import chalk from "chalk";
 import open from "open";
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
   intro,
@@ -25,7 +28,6 @@ import {
   text,
   password,
   select,
-  confirm,
   spinner,
   note,
   log,
@@ -34,6 +36,11 @@ import {
 } from "@clack/prompts";
 
 import { startService, ensureInternalToken, normalizeUrl } from "./up";
+import { ensureDashboard } from "../lib/dashboard";
+import { serviceStatus, stop as stopService, restart as restartService } from "../lib/service";
+import { saveInstanceUrl, readInstanceUrl } from "../lib/ports";
+
+declare const __CLI_VERSION__: string;
 
 /** Exit cleanly on Ctrl-C / Esc; otherwise narrow away clack's cancel symbol. */
 function ensure<T>(value: T | symbol): T {
@@ -87,12 +94,48 @@ async function bootstrapAdmin(
   return { ok: false, message: data?.error || "failed" };
 }
 
+/** Last error line from the service log — surfaced when the API won't boot so the
+ *  user sees the real cause (e.g. a locked DB) instead of a bare timeout. */
+function lastServiceError(): string | null {
+  for (const name of ["up.err.log", "up.log"]) {
+    const p = join(homedir(), ".openship", "logs", name);
+    if (!existsSync(p)) continue;
+    try {
+      const lines = readFileSync(p, "utf8").trim().split("\n");
+      const hit = [...lines].reverse().find((l) => /error|locked|EADDRINUSE|throw|cannot/i.test(l));
+      if (hit) return hit.trim().slice(0, 200);
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
 async function waitHealthy(apiPort: string, seconds = 90): Promise<boolean> {
   for (let i = 0; i < seconds; i++) {
     await new Promise((r) => setTimeout(r, 1000));
     try {
       await fetch(`http://127.0.0.1:${apiPort}/api/health`, { signal: AbortSignal.timeout(2000) });
       return true;
+    } catch {
+      /* not up yet */
+    }
+  }
+  return false;
+}
+
+/** Poll the dashboard port until it serves — the dist was pre-pulled, so the
+ *  service only has to boot it. Best-effort: returns false on timeout (the API
+ *  is already healthy; the dashboard just needs another moment). */
+async function waitDashboard(dashPort: string, seconds = 45): Promise<boolean> {
+  for (let i = 0; i < seconds; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const res = await fetch(`http://127.0.0.1:${dashPort}/`, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(2000),
+      });
+      if (res.status > 0) return true;
     } catch {
       /* not up yet */
     }
@@ -120,20 +163,21 @@ const b64url = (buf: Buffer) =>
 
 /**
  * Connect the org owner to Openship Cloud via the browser PKCE handshake, then
- * finalize on the loopback API (internal-token gated). Returns true when linked.
+ * finalize on the loopback API (internal-token gated). Returns the linked cloud
+ * account (its email) on success, or null when not linked.
  */
-async function connectOpenshipCloud(port: string): Promise<boolean> {
+async function connectOpenshipCloud(port: string): Promise<{ email: string | null } | null> {
   const already = await internalGet(port, "/api/system/cloud-status");
   if (already?.connected) {
     log.success(`Already connected to Openship Cloud${already.user?.email ? ` as ${already.user.email}` : ""}.`);
-    return true;
+    return { email: already.user?.email ?? null };
   }
 
   const capsEnv = await internalGet(port, "/api/health/env");
   const cloudApiUrl: string | undefined = capsEnv?.cloudApiUrl;
   if (!cloudApiUrl) {
     log.error("Couldn't discover the Openship Cloud URL — free domain unavailable. Use a custom domain instead.");
-    return false;
+    return null;
   }
 
   const verifier = b64url(randomBytes(32));
@@ -142,6 +186,16 @@ async function connectOpenshipCloud(port: string): Promise<boolean> {
 
   // Loopback listener captures the browser redirect (?code&state).
   const codePromise = new Promise<string | null>((resolve) => {
+    // Self-contained, branded result page (this opens in the user's real
+    // browser). Distinguishes success vs failure and auto-closes the tab.
+    const page = (ok: boolean): string => {
+      const icon = ok ? '<path d="M20 6 9 17l-5-5"/>' : '<path d="M18 6 6 18M6 6l12 12"/>';
+      const title = ok ? "Connected to Openship Cloud" : "Connection didn’t complete";
+      const msg = ok
+        ? "Your instance is now linked to your Openship Cloud account."
+        : "Something went wrong. Return to your terminal and run the connect step again.";
+      return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Openship</title><style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#09090b;color:#e7e7ea;font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}.card{width:min(92vw,420px);padding:40px 36px;text-align:center}.badge{margin:0 auto 20px;display:grid;place-items:center}svg{width:40px;height:40px}h1{margin:0 0 8px;font-size:19px;font-weight:600;letter-spacing:-.2px}p{margin:0;color:#9a9aa2;font-size:14px}.hint{margin-top:22px;font-size:12.5px;color:#6a6a72}</style></head><body><div class="card"><div class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="#e7e7ea" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></div><h1>${title}</h1><p>${msg}</p><div class="hint">You can close this tab and return to your terminal.</div></div><script>setTimeout(function(){try{window.close()}catch(e){}},1200)</script></body></html>`;
+    };
     const server = createServer((req, res) => {
       const u = new URL(req.url || "/", "http://127.0.0.1");
       if (!u.pathname.startsWith("/callback")) {
@@ -150,12 +204,10 @@ async function connectOpenshipCloud(port: string): Promise<boolean> {
       }
       const code = u.searchParams.get("code");
       const gotState = u.searchParams.get("state");
-      res.writeHead(200, { "Content-Type": "text/html" }).end(
-        "<html><body style='font:16px system-ui;padding:3rem;text-align:center'>" +
-          "<h2>Openship Cloud connected</h2><p>You can close this window and return to your terminal.</p></body></html>",
-      );
+      const ok = !!(code && gotState === state);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(page(ok));
       server.close();
-      resolve(code && gotState === state ? code : null);
+      resolve(ok ? code : null);
     });
     server.on("error", () => resolve(null));
     server.listen(0, "127.0.0.1", () => {
@@ -182,16 +234,16 @@ async function connectOpenshipCloud(port: string): Promise<boolean> {
   const code = await codePromise;
   if (!code) {
     s.stop("Openship Cloud wasn't authorized.", 1);
-    return false;
+    return null;
   }
   s.message("Linking this instance to Openship Cloud");
   const res = await internalPost(port, "/api/system/cloud-connect", { code, codeVerifier: verifier });
   if (!res.ok) {
     s.stop(`Couldn't link Openship Cloud: ${res.data?.error || "failed"}`, 1);
-    return false;
+    return null;
   }
-  s.stop("Connected to Openship Cloud.");
-  return true;
+  s.stop(`Connected to Openship Cloud${res.data?.email ? ` as ${res.data.email}` : ""}.`);
+  return { email: res.data?.email ?? null };
 }
 
 /** Prompt for a local admin (name / email / password). Used for the self-hosted
@@ -269,119 +321,257 @@ export async function runWizard(): Promise<void> {
     ),
   );
 
+  // 1. First-time admin — ALWAYS a local email + password, and the FIRST thing we
+  //    ask. This is your instance login; the domain, Openship Cloud link, and every
+  //    setting configured afterwards hang off this account. (Connecting Openship
+  //    Cloud later only attaches the free domain + mail — it never becomes sign-in.)
+  log.message(chalk.dim("First, your instance login (email + password) — this is how you sign in. Domain and Openship Cloud come next and never replace it."));
+  const admin = await promptLocalAdmin();
+  // Openship Cloud account attached for the free domain — display only, never the login.
+  let cloudEmail: string | null = null;
+
   let publicUrl: string | undefined;
   let behindProxy = false;
   let managedEdge = false;
   // Domain wiring executed AFTER the service + admin are up.
   let domainPlan:
-    | { type: "free"; slug: string; publicHost: string | null }
+    | { type: "free"; slug: string; publicHost: string }
     | { type: "custom"; hostname: string }
     | { type: "byo"; hostname: string }
     | { type: "none" } = { type: "none" };
 
-  // 1. Reachability.
-  const reach = ensure(
-    await select({
-      message: "How should this instance be reachable?",
-      initialValue: "private",
-      options: [
-        { value: "private", label: "Private", hint: "this machine only (localhost)" },
-        { value: "public", label: "Public", hint: "a server / VPS, reachable from other machines" },
-      ],
-    }),
-  );
+  // 2. Reachability + domain (settings that hang off the admin created above) — a
+  //    small back-navigable state machine. Clack has no native "back", so each
+  //    select offers "← Back" and captured inputs survive re-entry. Produces
+  //    publicUrl / behindProxy / managedEdge / domainPlan.
+  const canManage = process.platform === "linux";
+  const BACK = "__back__";
+  let slug = "";
+  let customDomainInput = "";
+  let byoDomainInput = "";
+  let publicHost: string | null = null;
 
-  if (reach === "public") {
-    const canManage = process.platform === "linux";
-    const domainType = ensure(
-      await select({
-        message: "How do you want a domain + HTTPS?",
-        initialValue: "free",
-        options: [
-          { value: "free", label: "Free domain", hint: "name.opsh.io via Openship Cloud — HTTPS handled for you" },
-          ...(canManage
-            ? [{ value: "custom", label: "Custom domain", hint: "your domain + free Let's Encrypt on this box" }]
-            : []),
-          { value: "byo", label: "Bring your own", hint: "your domain, behind your own reverse proxy" },
-        ],
+  // The server's public address — edge-proxy target + A-record hint. Auto-detect,
+  // and PROMPT when that fails: the free/custom paths REQUIRE it (without it the
+  // free registration 400s with "Could not resolve this server's public address").
+  async function resolvePublicHost(): Promise<string> {
+    if (publicHost) return publicHost;
+    const sp = spinner();
+    sp.start("Detecting this server's public IP");
+    const detected = await detectPublicIp();
+    if (detected) {
+      sp.stop(`Public IP: ${chalk.bold(detected)}`);
+      publicHost = detected;
+      return detected;
+    }
+    sp.stop("Couldn't detect the public IP automatically.", 1);
+    publicHost = ensure(
+      await text({
+        message: "This server's public IP or hostname",
+        placeholder: "203.0.113.10",
+        validate: (v) => (v?.trim() ? undefined : "Required — the edge proxy routes traffic to this address"),
       }),
-    );
+    ).trim();
+    return publicHost;
+  }
 
-    if (domainType === "free") {
-      const slug = ensure(
+  type DomainStage = "reach" | "type" | "free" | "custom" | "byo";
+  let stage: DomainStage = "reach";
+
+  log.message(chalk.dim("These are just starting choices — domain, Cloud, team, and the rest are all editable later in Settings."));
+
+  planning: while (true) {
+    if (stage === "reach") {
+      const reach = ensure(
+        await select({
+          message: "How should this instance be reachable?",
+          // Default to public — most people setting up on a server/VPS want a
+          // domain + HTTPS; localhost-only is the deliberate opt-out.
+          initialValue: "public",
+          options: [
+            { value: "public", label: "Public (server / VPS)", hint: "a domain + HTTPS, reachable from anywhere" },
+            { value: "private", label: "This machine only", hint: "localhost — no domain, log in on this box" },
+          ],
+        }),
+      );
+      if (reach === "private") {
+        domainPlan = { type: "none" };
+        publicUrl = undefined;
+        behindProxy = false;
+        managedEdge = false;
+        break planning;
+      }
+      stage = "type";
+      continue;
+    }
+
+    if (stage === "type") {
+      const domainType = ensure(
+        await select({
+          message: "How do you want a domain + HTTPS?",
+          initialValue: "free",
+          options: [
+            { value: "free", label: "Free domain", hint: "name.opsh.io via Openship Cloud — HTTPS handled for you" },
+            ...(canManage
+              ? [{ value: "custom", label: "Custom domain", hint: "your domain + free Let's Encrypt on this box" }]
+              : []),
+            { value: "byo", label: "Bring your own", hint: "your domain, behind your own reverse proxy" },
+            { value: BACK, label: "← Back" },
+          ],
+        }),
+      );
+      if (domainType === BACK) {
+        stage = "reach";
+        continue;
+      }
+      stage = domainType as DomainStage;
+      continue;
+    }
+
+    if (stage === "free") {
+      slug = ensure(
         await text({
           message: "Choose your subdomain",
           placeholder: "my-openship",
+          initialValue: slug || undefined,
           validate: (v) => (v && SLUG_RE.test(v.trim().toLowerCase()) ? undefined : "Lowercase letters, digits, hyphens"),
         }),
       )
         .trim()
         .toLowerCase();
-      const s = spinner();
-      s.start("Detecting this server's public IP");
-      const publicHost = await detectPublicIp();
-      s.stop(publicHost ? `Public IP: ${chalk.bold(publicHost)}` : "Couldn't detect the public IP automatically.");
+      const host = await resolvePublicHost();
+      note(
+        `${chalk.cyan(`https://${slug}.opsh.io`)}\n\n` +
+          `  ${chalk.dim("served via")}  Openship Cloud edge  ${chalk.dim("→")}  ${chalk.cyan(host)}\n\n` +
+          chalk.dim("Openship Cloud terminates HTTPS and forwards to this server."),
+        "Confirm free domain",
+      );
+      const go = ensure(
+        await select({
+          message: "Create this free domain?",
+          options: [
+            { value: "go", label: "Create it" },
+            { value: BACK, label: "← Back", hint: "change subdomain or IP" },
+          ],
+        }),
+      );
+      if (go === BACK) {
+        stage = "type";
+        continue;
+      }
       publicUrl = `https://${slug}.opsh.io`;
       behindProxy = true; // Oblien's edge sets a trusted XFF
-      domainPlan = { type: "free", slug, publicHost };
-    } else if (domainType === "custom") {
+      domainPlan = { type: "free", slug, publicHost: host };
+      break planning;
+    }
+
+    if (stage === "custom") {
       const raw = ensure(
         await text({
           message: "Your domain",
           placeholder: "ops.example.com",
+          initialValue: customDomainInput || undefined,
           validate: (v) => (v && normalizeUrl(v) ? undefined : "Enter a valid domain"),
         }),
       );
-      publicUrl = normalizeUrl(raw)!.replace(/^http:/i, "https:");
-      const hostname = new URL(publicUrl).hostname;
-      managedEdge = true;
-      behindProxy = true; // OpenResty terminates TLS + sets a trusted XFF
+      customDomainInput = raw;
+      const url = normalizeUrl(raw)!.replace(/^http:/i, "https:");
+      const hostname = new URL(url).hostname;
       if (typeof process.getuid === "function" && process.getuid() !== 0) {
         log.warn("Managed HTTPS installs OpenResty + certbot — that needs root. Re-run with sudo if it can't install.");
       }
-      const s = spinner();
-      s.start("Detecting this server's public IP");
-      const ip = await detectPublicIp();
-      s.stop(ip ? `Public IP: ${chalk.bold(ip)}` : "Couldn't detect the public IP automatically.");
+      const host = await resolvePublicHost();
       note(
         `Add a DNS ${chalk.bold("A record")}:\n\n` +
-          `  ${chalk.cyan(hostname)}  →  ${chalk.cyan(ip ?? "<this server's public IP>")}\n\n` +
+          `  ${chalk.cyan(hostname)}  →  ${chalk.cyan(host)}\n\n` +
           chalk.dim("HTTPS is issued automatically once DNS resolves (it retries for a couple minutes)."),
         "DNS",
       );
-      ensure(await confirm({ message: "A record set? (continue either way — it retries)", initialValue: true }));
-      domainPlan = { type: "custom", hostname };
-    } else {
-      const raw = ensure(
-        await text({
-          message: "Your domain (served behind your proxy)",
-          placeholder: "ops.example.com",
-          validate: (v) => (v && normalizeUrl(v) ? undefined : "Enter a valid domain"),
+      const go = ensure(
+        await select({
+          message: "A record added?",
+          options: [
+            { value: "go", label: "Continue", hint: "HTTPS provisions once DNS resolves — it retries" },
+            { value: BACK, label: "← Back", hint: "change the domain" },
+          ],
         }),
       );
-      publicUrl = normalizeUrl(raw)!;
-      behindProxy = true;
-      if (publicUrl.startsWith("http://")) {
-        log.warn("Serving over plain HTTP sends passwords in cleartext — put HTTPS in front before real use.");
+      if (go === BACK) {
+        stage = "type";
+        continue;
       }
-      domainPlan = { type: "byo", hostname: new URL(publicUrl).hostname };
+      publicUrl = url;
+      managedEdge = true;
+      behindProxy = true; // OpenResty terminates TLS + sets a trusted XFF
+      domainPlan = { type: "custom", hostname };
+      break planning;
     }
+
+    // stage === "byo"
+    const raw = ensure(
+      await text({
+        message: "Your domain (served behind your proxy)",
+        placeholder: "ops.example.com",
+        initialValue: byoDomainInput || undefined,
+        validate: (v) => (v && normalizeUrl(v) ? undefined : "Enter a valid domain"),
+      }),
+    );
+    byoDomainInput = raw;
+    const url = normalizeUrl(raw)!;
+    const hostname = new URL(url).hostname;
+    if (url.startsWith("http://")) {
+      log.warn("Serving over plain HTTP sends passwords in cleartext — put HTTPS in front before real use.");
+    }
+    note(
+      `${chalk.cyan(url)}\n\n` + chalk.dim("Point your reverse proxy at the dashboard port shown at the end."),
+      "Confirm",
+    );
+    const go = ensure(
+      await select({
+        message: "Continue?",
+        options: [
+          { value: "go", label: "Continue" },
+          { value: BACK, label: "← Back", hint: "change the domain" },
+        ],
+      }),
+    );
+    if (go === BACK) {
+      stage = "type";
+      continue;
+    }
+    publicUrl = url;
+    behindProxy = true;
+    domainPlan = { type: "byo", hostname };
+    break planning;
   }
 
-  // 2. Admin account (this instance never runs zero-auth). The free / Openship
-  //    Cloud path DERIVES the admin from your cloud login during connect below
-  //    (passwordless — same identity pipe as the desktop app), so there's no
-  //    local form here. Every other path creates a local admin now.
-  const isCloudDomain = domainPlan.type === "free";
-  const admin = isCloudDomain ? null : await promptLocalAdmin();
+  // 3. Deploy Openship as an app — pull the prebuilt DIST from GitHub (no build),
+  //    then run it through the SAME `up` service pipeline. The dist pull happens
+  //    LIVE here (not hidden in the background service) so you see it; the service
+  //    then reuses this exact cached bundle (matched by tag).
+  const uiTag = `v${__CLI_VERSION__}`;
+  const dl = spinner();
+  dl.start("Pulling the Openship dist from GitHub");
+  try {
+    await ensureDashboard({
+      tag: uiTag,
+      onProgress: (received, total) => {
+        if (total) dl.message(`Pulling the Openship dist from GitHub — ${Math.round((received / total) * 100)}%`);
+      },
+    });
+    dl.stop("Openship dist ready.");
+  } catch (e) {
+    dl.stop(`Couldn't pull the Openship dist: ${(e as Error).message}`, 1);
+    log.info("Check your network / that this release published its dashboard asset, then re-run `openship`.");
+    process.exit(1);
+  }
 
-  // 3. Install via the SAME `up` service pipeline (prebuilt, no build).
   const s = spinner();
   s.start("Installing Openship as a service");
   let started: { port: string; dashPort: string; publicUrl?: string };
   try {
-    started = startService(
-      { publicUrl, trustProxy: behindProxy, managedEdge, acmeEmail: managedEdge ? admin?.email : undefined },
+    started = await startService(
+      { publicUrl, trustProxy: behindProxy, managedEdge, acmeEmail: managedEdge ? admin.email : undefined, uiVersion: uiTag },
       { quiet: true },
     );
   } catch (e) {
@@ -391,30 +581,52 @@ export async function runWizard(): Promise<void> {
     process.exit(1);
   }
 
-  s.message("Waiting for Openship to come up");
+  s.message("Waiting for the Openship API");
   if (!(await waitHealthy(started.port))) {
     s.stop("Openship didn't become healthy in time.", 1);
-    log.info("Check logs: `openship logs` (or `openship up --foreground`).");
+    const reason = lastServiceError();
+    if (reason) log.error(reason);
+    if (reason && /lock/i.test(reason)) {
+      log.info("The database is locked by another instance — run `openship stop`, then re-run `openship`.");
+    } else {
+      log.info("Check logs: `openship logs` (or `openship up --foreground`).");
+    }
     process.exit(1);
   }
 
-  // Self-hosted paths create the local admin now; the cloud path creates it from
-  // your cloud identity during connect (below), so skip the local bootstrap here.
-  if (admin) {
-    s.message("Creating your admin account");
-    const adminRes = await bootstrapAdmin(started.port, admin);
-    if (!adminRes.ok) {
-      s.stop(`Couldn't create the admin account: ${adminRes.message}`, 1);
+  // Always create the local admin now — before any cloud connect — so the instance
+  // login is the email + password you set, never derived from Openship Cloud.
+  s.message("Creating your admin account");
+  const adminRes = await bootstrapAdmin(started.port, admin);
+  if (!adminRes.ok) {
+    s.stop(`Couldn't create the admin account: ${adminRes.message}`, 1);
+    process.exit(1);
+  }
+  if (adminRes.message === "already-exists") {
+    // This data dir already had an admin (a re-run, or a prior cloud/dirty setup).
+    // bootstrap-admin is one-shot and won't touch it, so force the box to LOCAL
+    // login with the credentials just entered — reset sets the password, revokes
+    // stale sessions, and flips authMode back to local. Without this, a box that
+    // was previously cloud-linked keeps showing "Sign in with Openship" instead of
+    // the email + password form.
+    s.message("Applying your admin login");
+    const rr = await internalPost(started.port, "/api/system/reset-admin-password", {
+      email: admin.email,
+      name: admin.name,
+      password: admin.password,
+    });
+    if (!rr.ok) {
+      s.stop(`Couldn't set your admin login: ${rr.data?.error || "failed"}`, 1);
       process.exit(1);
     }
-    s.stop(
-      adminRes.message === "already-exists"
-        ? "An admin already exists — use your existing login."
-        : `Admin account created for ${admin.email}.`,
-    );
-  } else {
-    s.stop("Openship is up.");
   }
+  s.message(`Admin ready for ${admin.email}`);
+
+  // The dist is already cached, so the dashboard only has to boot. Wait for it so
+  // "live" is truthful (best-effort — the API already serves regardless).
+  s.message("Starting the Openship dashboard");
+  await waitDashboard(started.dashPort);
+  s.stop("Deployed.");
 
   // 4. Register the control plane as an app + attach its domain (reuse Openship's
   //    own app + domain pipeline). Runs for every mode so it shows under Apps.
@@ -422,34 +634,57 @@ export async function runWizard(): Promise<void> {
   const port = started.port;
 
   if (domainPlan.type === "free") {
-    // Connect establishes the box admin from your cloud identity (passwordless).
-    const linked = await connectOpenshipCloud(port);
-    if (!linked) {
-      // Cloud wasn't authorized → the box has NO admin yet (the cloud path skips
-      // the local form). Create a local admin now so setup never leaves the box
-      // login-less, and register without the free domain.
-      log.warn("Openship Cloud wasn't connected — set up a local admin instead. You can add the free domain later in Settings → Cloud.");
-      const fb = await promptLocalAdmin();
-      const abr = await bootstrapAdmin(port, fb);
-      if (!abr.ok) {
-        log.error(`Couldn't create the admin account: ${abr.message}`);
-        process.exit(1);
-      }
-      await internalPost(port, "/api/system/self-register", { domainType: "byo" }); // still register as an app
+    // Connect Openship Cloud — a SEPARATE step from login. Authorize in the browser
+    // (link printed on the terminal); it only attaches the free .opsh.io domain +
+    // mail. The backend links it to the local admin already created above WITHOUT
+    // changing the login method. If declined, the box still works on your local
+    // login — we just skip the free domain.
+    const cloud = await connectOpenshipCloud(port);
+    if (!cloud) {
+      log.warn("Openship Cloud wasn't connected — skipping the free domain. Your local admin login still works; add the domain later in Settings → Cloud.");
+      await internalPost(port, "/api/system/self-register", { domainType: "byo" });
     } else {
-      const s2 = spinner();
-      s2.start("Registering your free domain with Openship Cloud");
-      const res = await internalPost(port, "/api/system/self-register", {
-        domainType: "free",
-        slug: domainPlan.slug,
-        publicHost: domainPlan.publicHost,
-        dashPort: Number(started.dashPort),
-      });
-      if (res.ok && res.data?.url) {
-        liveUrl = res.data.url;
-        s2.stop(`Free domain live: ${res.data.url}`);
-      } else {
-        s2.stop(`Couldn't register the free domain: ${res.data?.error || "failed"}`, 1);
+      cloudEmail = cloud.email;
+      // Availability is only knowable now (cloud is connected) — so surface it
+      // here: on a taken/invalid subdomain, re-prompt and retry instead of
+      // dead-ending. The public host is guaranteed set (resolvePublicHost).
+      let regSlug = domainPlan.slug;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const s2 = spinner();
+        s2.start(`Registering ${chalk.bold(`${regSlug}.opsh.io`)} with Openship Cloud`);
+        const res = await internalPost(port, "/api/system/self-register", {
+          domainType: "free",
+          slug: regSlug,
+          publicHost: domainPlan.publicHost,
+          dashPort: Number(started.dashPort),
+        });
+        if (res.ok && res.data?.url) {
+          liveUrl = res.data.url;
+          s2.stop(`Free domain live: ${res.data.url}`);
+          break;
+        }
+        s2.stop(`Couldn't register ${regSlug}.opsh.io: ${res.data?.error || "failed"}`, 1);
+        const next = ensure(
+          await select({
+            message: "Try a different subdomain?",
+            options: [
+              { value: "retry", label: "Pick another subdomain" },
+              { value: "skip", label: "Skip for now", hint: "log in on this server; add a domain later in Settings → Cloud" },
+            ],
+          }),
+        );
+        if (next === "skip") break;
+        regSlug = ensure(
+          await text({
+            message: "Choose your subdomain",
+            placeholder: "my-openship",
+            initialValue: regSlug,
+            validate: (v) => (v && SLUG_RE.test(v.trim().toLowerCase()) ? undefined : "Lowercase letters, digits, hyphens"),
+          }),
+        )
+          .trim()
+          .toLowerCase();
       }
     }
   } else if (domainPlan.type === "custom") {
@@ -539,14 +774,121 @@ export async function runWizard(): Promise<void> {
     await internalPost(port, "/api/system/self-register", { domainType: "byo" });
   }
 
-  note(
-    `${chalk.bold(liveUrl)}\n\n` +
-      chalk.dim(`${admin ? `Log in as ${admin.email}` : "Log in with Openship Cloud"}. Openship now appears under your Apps, and runs as a service (restarts on boot).`),
-    "Openship is live",
+  // Remember the access URL so `openship` (control panel) can show/open it later.
+  saveInstanceUrl(liveUrl);
+
+  // Borderless summary (left rail only). A boxed note() sizes to the longest
+  // line and doesn't wrap, so long lines (Cloud / the help text) spill past the
+  // right border on narrow terminals — the rail-only log.* flows cleanly.
+  const pad = (label: string) => chalk.dim(label.padEnd(11));
+  log.success(chalk.bold("Openship is live"));
+  log.message(
+    `${pad("URL")}${chalk.bold(liveUrl)}\n` +
+      `${pad("Dashboard")}http://localhost:${started.dashPort}\n` +
+      `${pad("API")}http://localhost:${started.port}\n` +
+      `${pad("Login")}${admin.email} ${chalk.dim("(email + password you set)")}\n` +
+      (cloudEmail
+        ? `${pad("Cloud")}${chalk.dim("connected as ")}${cloudEmail}${chalk.dim(" — free domain + mail only")}\n`
+        : "") +
+      `${pad("Status")}${chalk.green("running")} ${chalk.dim("· service (restarts on boot)")}`,
+  );
+  log.message(
+    chalk.dim("Sign in with the email + password you just set. Openship appears under your Apps.\n") +
+      chalk.dim("Change the domain, Openship Cloud, team, and everything else anytime in Settings.\n") +
+      chalk.dim(`Locked out? Run ${chalk.reset("openship reset-admin-password")}${chalk.dim(" on this machine — resets your login without signing in.")}`),
   );
   outro(
     domainPlan.type === "byo"
       ? chalk.dim("Point your reverse proxy at the dashboard port above.")
       : chalk.green("Happy shipping."),
   );
+}
+
+/** The resolved API/dashboard ports the service last used. */
+function storedPorts(): { api?: number; dashboard?: number } {
+  const p = join(homedir(), ".openship", "ports.json");
+  try {
+    return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Control panel for an ALREADY-SET-UP box — what bare `openship` shows instead of
+ * re-running setup once a service is installed. Manage the running instance
+ * (open / status / start-stop-restart / reset login / reconfigure) rather than
+ * starting over.
+ */
+export async function runControl(): Promise<void> {
+  const svc = serviceStatus();
+  const ports = storedPorts();
+  const apiPort = String(ports.api ?? 4000);
+  const dashUrl = `http://localhost:${ports.dashboard ?? 3001}`;
+  const publicUrl = readInstanceUrl();
+  // The real front door: the public domain if one was set, else the local dashboard.
+  const primaryUrl = publicUrl && !/^https?:\/\/localhost/i.test(publicUrl) ? publicUrl : dashUrl;
+
+  intro(`${chalk.bgCyan(chalk.black(" Openship "))}${chalk.dim(" control")}`);
+  note(
+    `${chalk.dim("URL".padEnd(11))}${chalk.bold(primaryUrl)}\n` +
+      `${chalk.dim("Service".padEnd(11))}${svc.running ? chalk.green("running") : chalk.yellow("stopped")}\n` +
+      `${chalk.dim("Dashboard".padEnd(11))}${dashUrl}\n` +
+      (ports.api ? `${chalk.dim("API".padEnd(11))}http://localhost:${ports.api}\n` : "") +
+      `${chalk.dim("Manager".padEnd(11))}${svc.kind === "unsupported" ? "none" : svc.kind}`,
+    "Openship is already set up",
+  );
+
+  const action = ensure(
+    await select({
+      message: "What would you like to do?",
+      options: [
+        { value: "open", label: "Open the dashboard" },
+        svc.running
+          ? { value: "restart", label: "Restart the service" }
+          : { value: "start", label: "Start the service" },
+        { value: "stop", label: "Stop the service", hint: "won't restart on boot" },
+        { value: "reset", label: "Reset admin password", hint: "sets a local email + password login" },
+        { value: "reconfigure", label: "Re-run setup", hint: "reconfigure domain / cloud / admin" },
+        { value: "quit", label: "Quit" },
+      ],
+    }),
+  );
+
+  switch (action) {
+    case "open":
+      await open(primaryUrl).catch(() => {});
+      outro(chalk.dim(`Opening ${primaryUrl}`));
+      return;
+    case "start":
+      await startService({});
+      return;
+    case "restart": {
+      const r = restartService();
+      outro(r.restarted ? chalk.green("Restarted.") : chalk.yellow(r.detail));
+      return;
+    }
+    case "stop": {
+      const r = stopService();
+      outro(chalk.green(`Stopped. ${chalk.dim(r.detail)}`));
+      return;
+    }
+    case "reset": {
+      const pw = ensure(
+        await password({ message: "New admin password", validate: (v) => (v && v.length >= 8 ? undefined : "At least 8 characters") }),
+      );
+      const rr = await internalPost(apiPort, "/api/system/reset-admin-password", { password: pw });
+      outro(
+        rr.ok
+          ? chalk.green(`Password reset. Sign in at ${dashUrl} with your email + new password.`)
+          : chalk.red(`Couldn't reset: ${rr.data?.error || "failed"}`),
+      );
+      return;
+    }
+    case "reconfigure":
+      await runWizard();
+      return;
+    default:
+      outro(chalk.dim("Nothing changed."));
+  }
 }

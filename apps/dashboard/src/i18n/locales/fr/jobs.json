@@ -1,0 +1,186 @@
+{
+  "backups": {
+    "section": "Planifications de sauvegarde",
+    "sectionDesc": "Sauvegardes automatiques planifiées par projet ou service. Gérées dans l'onglet Sauvegardes de chaque projet.",
+    "projectDefault": "Par défaut du projet",
+    "mailServer": "Serveur de messagerie",
+    "manage": "Gérer dans Sauvegardes",
+    "badge": "Sauvegarde",
+    "never": "Jamais exécuté",
+    "status": {
+      "succeeded": "Réussi",
+      "failed": "Échoué",
+      "cancelled": "Annulé",
+      "running": "En cours"
+    }
+  },
+  "title": "Tâches",
+  "subtitle": "Maintenance intégrée et commandes personnalisées exécutées sur vos serveurs.",
+  "empty": "Aucune tâche planifiée pour le moment.",
+  "searchPlaceholder": "Rechercher des tâches…",
+  "noResults": "Aucune tâche ne correspond à vos filtres.",
+  "overview": {
+    "title": "En un coup d'œil",
+    "subtitle": "Tâches sur cette instance",
+    "all": "Toutes les tâches",
+    "running": "En cours",
+    "failed": "Échouées",
+    "scheduled": "Planifiées",
+    "disabled": "Désactivées"
+  },
+  "loadFailed": "Échec du chargement des tâches.",
+  "kind": {
+    "system": "Système",
+    "custom": "Personnalisée"
+  },
+  "fields": {
+    "schedule": "Planification",
+    "nextRun": "Prochaine exécution",
+    "lastRun": "Dernière exécution",
+    "never": "Jamais exécuté",
+    "notScheduled": "Non planifié"
+  },
+  "status": {
+    "success": "Succès",
+    "failed": "Échoué",
+    "running": "En cours"
+  },
+  "actions": {
+    "run": "Exécuter maintenant",
+    "running": "Exécution…",
+    "edit": "Modifier la planification",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "enable": "Activer",
+    "disable": "Désactiver",
+    "viewLogs": "Journaux"
+  },
+  "cronHint": "Cron standard à 5 champs (minute heure jour mois jour-semaine), UTC.",
+  "toast": {
+    "ran": "{label} démarré.",
+    "ranFailed": "Échec de l'exécution de {label}.",
+    "saved": "Planification mise à jour pour {label}.",
+    "saved2": "Tâche mise à jour.",
+    "saveFailed": "Échec de la mise à jour de {label}.",
+    "enabled": "{label} activé.",
+    "disabled": "{label} désactivé.",
+    "toggleFailed": "Échec de la mise à jour de {label}.",
+    "title": "Tâches",
+    "created": "Tâche créée.",
+    "createFailed": "Échec de la création de la tâche.",
+    "deleted": "Tâche supprimée.",
+    "deleteFailed": "Échec de la suppression de la tâche."
+  },
+  "newJob": "Nouvelle tâche",
+  "sections": {
+    "system": "Tâches système",
+    "systemDesc": "Maintenance intégrée sur cette instance.",
+    "custom": "Tâches personnalisées",
+    "customDesc": "Commandes que vous exécutez sur vos serveurs, selon une planification."
+  },
+  "customEmpty": {
+    "title": "Aucune tâche personnalisée pour le moment",
+    "desc": "Exécutez une commande sur l'un de vos serveurs — selon une planification, une fois, ou sur un événement — avec nouvelles tentatives, secrets, journaux en direct et notifications.",
+    "cta": "Créer une tâche",
+    "docs": "Docs"
+  },
+  "create": {
+    "title": "Nouvelle tâche",
+    "name": "Nom",
+    "namePlaceholder": "Vacuum DB nocturne",
+    "server": "Serveur",
+    "servers": "Serveurs",
+    "noServers": "Aucun serveur connecté — ajoutez-en un d'abord.",
+    "command": "Commande",
+    "commandPlaceholder": "pg_dump ... > /backups/db.sql",
+    "commandHint": "S'exécute via SSH sur le(s) serveur(s) sélectionné(s). Un `docker run --rm image cmd` fonctionne aussi.",
+    "scheduleType": "Quand exécuter",
+    "scheduleTypes": {
+      "recurring": "Selon une planification",
+      "once": "Une fois",
+      "manual": "Manuel"
+    },
+    "sections": {
+      "basics": "Bases",
+      "schedule": "Planification",
+      "servers": "Serveurs cibles",
+      "reliability": "Fiabilité",
+      "environment": "Environnement",
+      "triggers": "Dépendances et déclencheurs",
+      "notifications": "Notifications"
+    },
+    "schedule": "Planification (cron)",
+    "runAt": "Exécuter à",
+    "manualHint": "S'exécute uniquement lorsqu'elle est déclenchée — Exécuter maintenant, une dépendance ou un événement.",
+    "timeout": "Délai d'expiration (s)",
+    "retryAttempts": "Tentatives max",
+    "retryBackoff": "Délai entre tentatives (s)",
+    "advanced": "Avancé",
+    "env": "Variables d'environnement",
+    "addVar": "Ajouter une variable",
+    "secrets": "Secrets",
+    "addSecret": "Ajouter un secret",
+    "replaceSecrets": "Remplacer les secrets",
+    "secretsSet": "secret(s) défini(s)",
+    "noSecrets": "Aucun secret défini.",
+    "dependencies": "Exécuter après",
+    "dependenciesHint": "Cette tâche s'exécute après la réussite de la ou des tâches sélectionnées.",
+    "triggers": "Déclencheurs d'événements",
+    "notifications": "Notifications",
+    "noChannels": "Aucun canal de notification — ajoutez-en un dans Paramètres → Notifications.",
+    "notificationsHint": "Remplace les paramètres de notification globaux pour cette tâche.",
+    "submit": "Créer la tâche",
+    "creating": "Enregistrement…",
+    "cancel": "Annuler",
+    "needServer": "Connectez d'abord un serveur",
+    "pasteEnv": "Coller .env",
+    "uploadEnv": "Importer .env",
+    "envPasteEmpty": "Aucune variable trouvée",
+    "comingSoon": "Bientôt",
+    "setupChannel": "Configurer un canal",
+    "customTriggerSoon": "Déclencheur personnalisé",
+    "docsLink": "En savoir plus sur les tâches",
+    "docsBody": "Planifications, nouvelles tentatives, secrets et notifications",
+    "summary": {
+      "title": "Résumé",
+      "command": "Commande",
+      "schedule": "Planification",
+      "targets": "Cibles",
+      "retry": "Nouvelles tentatives",
+      "timeout": "Délai d'expiration",
+      "notify": "Notifications",
+      "none": "—",
+      "retryOff": "Aucune"
+    }
+  },
+  "edit": {
+    "title": "Modifier la tâche",
+    "action": "Modifier",
+    "save": "Enregistrer les modifications"
+  },
+  "detail": {
+    "back": "Retour aux tâches",
+    "tabs": {
+      "overview": "Vue d'ensemble",
+      "runs": "Exécutions"
+    },
+    "servers": "Serveurs",
+    "retry": "Nouvelles tentatives",
+    "retryValue": "{n} tentatives, {s}s entre chaque",
+    "notifyValue": "{c} canal(aux) sur {s}",
+    "onceAt": "Une fois à",
+    "noRuns": "Aucune exécution pour le moment."
+  },
+  "delete": {
+    "action": "Supprimer",
+    "confirm": "Supprimer cette tâche ?",
+    "deleting": "Suppression…"
+  },
+  "logs": {
+    "title": "Journaux d'exécution",
+    "streaming": "Diffusion en direct…",
+    "empty": "Aucune sortie pour le moment.",
+    "close": "Fermer",
+    "exit": "Code de sortie {code}"
+  }
+}

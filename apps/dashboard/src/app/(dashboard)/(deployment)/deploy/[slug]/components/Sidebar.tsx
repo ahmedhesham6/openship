@@ -237,26 +237,27 @@ const Sidebar: React.FC = () => {
     }
 
     // ── Clone-strategy resolution (self-hosted server deploys) ──────────
-    // Deterministic — never ask when the answer is knowable. A server deploy
-    // that clones on the remote worker picks the ONE path that works from
-    // what's available, in this order:
-    //   1. gh CLI (or an explicit "build local" choice) → build on THIS host
-    //      and ship only the artifact. Always works when gh is logged in, and
-    //      the gh token never leaves the box. (Forwarding gh for a server-side
-    //      clone stays available via the explicit Forward-credentials toggle.)
-    //   2. Openship App / custom PAT → server-side clone with that credential.
-    //   3. nothing resolvable → surface the modal — the only real
-    //      "we can't clone this repo" case.
-    // buildStrategy="local" already clones on the API host, so it's never a
-    // question; cloud targets go through requireCloud; local targets don't clone.
+    // Deterministic — never ask when the answer is knowable. Server-side clone
+    // is the DEFAULT: any resolvable credential (local gh forwarded over the
+    // relay, Openship App / custom PAT, or a per-server credential) lets the
+    // clone run on the remote worker. We no longer flip to a local build just
+    // because gh is logged in — the gh token is now forwarded for the clone,
+    // which the user opted into as the default. Only an EXPLICIT "build local"
+    // preference builds on this host; a genuine no-credential case surfaces the
+    // modal (and even that degrades to an api-host clone server-side).
+    // buildStrategy="local" already clones on the API host; cloud targets go
+    // through requireCloud; local targets don't clone.
     let buildStrategyOverride: BuildStrategy | undefined;
     if (config.deployTarget === "server" && config.buildStrategy === "server") {
       const ghAvailable = !!githubState?.sources.ghCli.available;
       const appAvailable =
         !!githubState?.sources.openshipApp.connected &&
         !!githubState?.sources.openshipApp.hasInstallations;
-      let remoteCredential = appAvailable || cloneGate.hasGlobalToken;
-      const willBuildLocal = ghAvailable || cloneGate.preference === "local";
+      // gh counts as a remote credential now — forwarded over the relay on
+      // desktop, or (self-hosted) it just lets the backend gracefully degrade
+      // to an api-host clone rather than dead-end.
+      let remoteCredential = appAvailable || cloneGate.hasGlobalToken || ghAvailable;
+      const willBuildLocal = cloneGate.preference === "local";
 
       // The target server may hold its OWN GitHub credential (device-login
       // token / PAT / SSH key or per-repo deploy key). That's a valid remote

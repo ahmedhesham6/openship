@@ -12,6 +12,13 @@ import {
   Network,
   Boxes,
   Activity,
+  Container,
+  Globe,
+  GitBranch,
+  BookOpen,
+  ExternalLink,
+  Layers,
+  MapPin,
 } from "lucide-react";
 import { systemApi } from "@/lib/api";
 import { PageContainer } from "@/components/ui/PageContainer";
@@ -37,6 +44,8 @@ interface ServerEntry {
   user: string;
   auth: "key" | "password" | null;
   country: string | null;
+  /** Projects currently deployed to this server (active deployment → this host). */
+  projectCount: number;
 }
 
 /** Per-state colors: an ambient presence dot on the avatar + a word on the right. */
@@ -73,6 +82,7 @@ export default function ServersPage() {
           user: s.sshUser ?? "root",
           auth: (s.sshAuthMethod as "key" | "password" | null) ?? null,
           country: s.country ?? null,
+          projectCount: s.projectCount ?? 0,
         })),
       );
     } catch {
@@ -137,6 +147,10 @@ export default function ServersPage() {
     { online: 0, offline: 0, checking: 0 } as Record<Reachability, number>,
   );
 
+  const totalProjects = servers.reduce((sum, s) => sum + s.projectCount, 0);
+  const regionCount = new Set(servers.map((s) => s.country).filter(Boolean)).size;
+  const onlinePct = servers.length ? Math.round((counts.online / servers.length) * 100) : 0;
+
   const tabs: TabDef<ServersTab>[] = [
     { key: "servers", label: t.servers.tabsNav.servers, icon: Server },
     { key: "cluster", label: t.servers.tabsNav.cluster, icon: Boxes },
@@ -184,17 +198,18 @@ export default function ServersPage() {
         />
       )}
 
-      {activeTab === "servers" && (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6">
-          {/* ── LEFT COLUMN ── */}
-          <div className="min-w-0">
-            {loading ? (
-              <div className="flex items-center justify-center py-20">
-                <Loader2 className="size-5 animate-spin text-muted-foreground" />
-              </div>
-            ) : servers.length === 0 ? (
-              <EmptyState onAdd={() => router.push("/servers/new")} />
-            ) : (
+      {activeTab === "servers" &&
+        (loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : servers.length === 0 ? (
+          // Empty state stands alone (no Quick Info card) and centers.
+          <EmptyState onAdd={() => router.push("/servers/new")} />
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6">
+            {/* ── LEFT COLUMN ── */}
+            <div className="min-w-0">
               <div className="overflow-hidden rounded-2xl border border-border/50 bg-card divide-y divide-border/50">
                 {servers.map((server) => {
                   const state = reach[server.id] ?? "checking";
@@ -239,6 +254,17 @@ export default function ServersPage() {
 
                       {/* Meta chips */}
                       <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+                        <span
+                          title={t.servers.list.projects}
+                          className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-xs ${
+                            server.projectCount > 0
+                              ? "bg-muted/60 text-foreground/80"
+                              : "text-muted-foreground/60"
+                          }`}
+                        >
+                          <Layers className="size-3.5" />
+                          {server.projectCount}
+                        </span>
                         {authLabel && (
                           <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-muted/60 px-2 py-0.5 text-xs text-muted-foreground">
                             <AuthIcon className="size-3.5" />
@@ -268,11 +294,10 @@ export default function ServersPage() {
                   );
                 })}
               </div>
-            )}
-          </div>
+            </div>
 
-          {/* ── RIGHT COLUMN (Sticky) ── */}
-          <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+            {/* ── RIGHT COLUMN (Sticky) ── */}
+            <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
             <div className="bg-card rounded-2xl border border-border/50">
               <div className="flex items-center gap-3 px-5 py-4 border-b border-border/50">
                 <div className="w-9 h-9 bg-muted rounded-xl flex items-center justify-center">
@@ -283,34 +308,53 @@ export default function ServersPage() {
                   <p className="text-xs text-muted-foreground">{t.servers.list.serverOverview}</p>
                 </div>
               </div>
-              <div className="p-5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">{t.servers.list.totalServers}</span>
-                  <span className="text-sm font-medium text-foreground">{loading ? "…" : servers.length}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">{t.servers.list.online}</span>
-                  <span className="text-sm font-medium text-success">
-                    {loading ? "…" : counts.online}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">{t.servers.list.offline}</span>
-                  <span className="text-sm font-medium text-danger">
-                    {loading ? "…" : counts.offline}
-                  </span>
-                </div>
-                {counts.checking > 0 && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">{t.servers.list.checking}</span>
-                    <span className="text-sm font-medium text-muted-foreground">{counts.checking}</span>
+              <div className="p-5 space-y-5">
+                {/* Health ratio — online / total with a progress bar. */}
+                <div>
+                  <div className="flex items-baseline justify-between">
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-2xl font-semibold text-foreground tabular-nums">{counts.online}</span>
+                      <span className="text-sm text-muted-foreground">
+                        / {servers.length} {t.servers.list.online}
+                      </span>
+                    </div>
+                    <span className="text-xs font-medium text-muted-foreground tabular-nums">{onlinePct}%</span>
                   </div>
-                )}
+                  <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-success-solid transition-[width] duration-500"
+                      style={{ width: `${onlinePct}%` }}
+                    />
+                  </div>
+                  {counts.offline > 0 && (
+                    <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-danger">
+                      <span className="size-1.5 rounded-full bg-danger-solid" />
+                      {counts.offline} {t.servers.list.offline}
+                    </p>
+                  )}
+                </div>
+
+                {/* Fleet stats. */}
+                <div className="space-y-0.5 border-t border-border/50 pt-4">
+                  {[
+                    { icon: Server, label: t.servers.list.totalServers, value: servers.length },
+                    { icon: Layers, label: t.servers.list.projects, value: totalProjects },
+                    { icon: MapPin, label: t.servers.list.regions, value: regionCount },
+                  ].map((row) => (
+                    <div key={row.label} className="flex items-center justify-between py-1.5">
+                      <span className="inline-flex items-center gap-2.5 text-sm text-muted-foreground">
+                        <row.icon className="size-4 text-muted-foreground/60" />
+                        {row.label}
+                      </span>
+                      <span className="text-sm font-medium text-foreground tabular-nums">{row.value}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
         </div>
-      )}
+      ))}
     </PageContainer>
   );
 }
@@ -323,28 +367,33 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
     <div className="py-16 text-center">
       <div className="relative mx-auto w-64 h-44 mb-8">
         <svg className="absolute inset-0 w-full h-full" viewBox="0 0 260 180" fill="none">
-          <rect x="60" y="50" width="120" height="90" rx="14" fill="var(--th-sf-04)" />
-          <rect x="50" y="40" width="120" height="90" rx="14" fill="var(--th-sf-03)" stroke="var(--th-bd-subtle)" strokeWidth="1" />
-          <rect x="40" y="30" width="120" height="90" rx="14" fill="var(--th-card-bg)" stroke="var(--th-bd-default)" strokeWidth="1" />
-          <rect x="55" y="46" width="90" height="6" rx="3" fill="var(--th-on-08)" />
-          <circle cx="152" cy="49" r="3" fill="#22c55e" fillOpacity="0.6" />
-          <rect x="55" y="60" width="90" height="6" rx="3" fill="var(--th-on-08)" />
-          <circle cx="152" cy="63" r="3" fill="#22c55e" fillOpacity="0.6" />
-          <rect x="55" y="74" width="90" height="6" rx="3" fill="var(--th-on-08)" />
-          <circle cx="152" cy="77" r="3" fill="var(--th-on-12)" />
-          <rect x="55" y="92" width="42" height="22" rx="5" fill="var(--th-on-05)" stroke="var(--th-on-10)" strokeWidth="1" />
-          <path d="M63 98l5 4-5 4" stroke="var(--th-on-30)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          <rect x="72" y="105" width="16" height="2" rx="1" fill="var(--th-on-16)" />
-          <circle cx="210" cy="85" r="22" fill="var(--th-on-05)" />
-          <circle cx="210" cy="85" r="16" fill="var(--th-card-bg)" stroke="var(--th-on-20)" strokeWidth="2" strokeDasharray="4 3" />
-          <path d="M210 77v16M202 85h16" stroke="var(--th-on-40)" strokeWidth="2" strokeLinecap="round" />
-          <circle cx="25" cy="55" r="4" fill="var(--th-on-10)" />
-          <circle cx="35" cy="145" r="6" fill="var(--th-on-08)" />
-          <circle cx="235" cy="38" r="3" fill="var(--th-on-12)" />
-          <circle cx="248" cy="130" r="5" fill="var(--th-on-06)" />
-          <path d="M20 105l2-4 2 4-4-2 4 0-4 2z" fill="var(--th-on-16)" />
-          <path d="M225 150l1.5-3 1.5 3-3-1.5 3 0-3 1.5z" fill="var(--th-on-12)" />
-          <path d="M170 85 Q 185 82 195 85" stroke="var(--th-on-12)" strokeWidth="1.5" strokeDasharray="3 3" fill="none" />
+          {/* Stacked server card */}
+          <rect x="58" y="52" width="116" height="88" rx="14" fill="var(--th-sf-04)" />
+          <rect x="48" y="42" width="116" height="88" rx="14" fill="var(--th-sf-03)" stroke="var(--th-bd-subtle)" strokeWidth="1" />
+          <rect x="38" y="32" width="116" height="88" rx="14" fill="var(--th-card-bg)" stroke="var(--th-bd-default)" strokeWidth="1" />
+          {/* Rack units — one online (single success accent), the rest idle */}
+          <rect x="52" y="46" width="74" height="16" rx="4" fill="var(--th-on-05)" stroke="var(--th-on-10)" strokeWidth="0.8" />
+          <rect x="58" y="52" width="38" height="4" rx="2" fill="var(--th-on-12)" />
+          <circle cx="138" cy="54" r="3" fill="#22c55e" fillOpacity="0.7" />
+          <rect x="52" y="68" width="74" height="16" rx="4" fill="var(--th-on-04)" stroke="var(--th-on-08)" strokeWidth="0.8" />
+          <rect x="58" y="74" width="38" height="4" rx="2" fill="var(--th-on-10)" />
+          <circle cx="138" cy="76" r="3" fill="var(--th-on-16)" />
+          <rect x="52" y="90" width="74" height="16" rx="4" fill="var(--th-on-04)" stroke="var(--th-on-08)" strokeWidth="0.8" />
+          <rect x="58" y="96" width="38" height="4" rx="2" fill="var(--th-on-08)" />
+          <circle cx="138" cy="98" r="3" fill="var(--th-on-12)" />
+          {/* Dashed connector → add node */}
+          <path d="M154 86 Q 176 84 188 86" stroke="var(--th-on-16)" strokeWidth="1.5" strokeDasharray="3 3" fill="none" />
+          {/* Add-server node */}
+          <circle cx="210" cy="86" r="22" fill="var(--th-on-05)" />
+          <circle cx="210" cy="86" r="16" fill="var(--th-card-bg)" stroke="var(--th-on-20)" strokeWidth="2" strokeDasharray="4 3" />
+          <path d="M210 78v16M202 86h16" stroke="var(--th-on-40)" strokeWidth="2" strokeLinecap="round" />
+          {/* Decorative dots + sparkles */}
+          <circle cx="26" cy="58" r="4" fill="var(--th-on-10)" />
+          <circle cx="34" cy="146" r="6" fill="var(--th-on-06)" />
+          <circle cx="238" cy="40" r="3.5" fill="var(--th-on-12)" />
+          <circle cx="248" cy="132" r="4.5" fill="var(--th-on-06)" />
+          <path d="M22 104l2-4 2 4-4-2 4 0-4 2z" fill="var(--th-on-16)" />
+          <path d="M228 150l1.6-3.2 1.6 3.2-3.2-1.6 3.2 0-3.2 1.6z" fill="var(--th-on-12)" />
         </svg>
       </div>
 
@@ -363,6 +412,16 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
           <Plus className="size-4" />
           {t.servers.list.addFirstServer}
         </button>
+        <a
+          href="https://openship.io/docs/self-hosting"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 rounded-xl bg-muted/50 px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          <BookOpen className="size-4" />
+          {t.servers.list.seeDocs}
+          <ExternalLink className="size-3.5 opacity-60" />
+        </a>
       </div>
 
       <div className="max-w-2xl mx-auto">
@@ -371,14 +430,14 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
         </p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: "Docker", desc: t.servers.list.dockerDesc },
-            { label: "OpenResty", desc: t.servers.list.openRestyDesc },
-            { label: t.servers.list.monitoring, desc: t.servers.list.monitoringDesc },
-            { label: "Git", desc: t.servers.list.gitDesc },
+            { label: t.servers.list.featContainer, desc: t.servers.list.featContainerDesc, Icon: Container },
+            { label: t.servers.list.featProxy, desc: t.servers.list.featProxyDesc, Icon: Globe },
+            { label: t.servers.list.monitoring, desc: t.servers.list.monitoringDesc, Icon: Activity },
+            { label: "Git", desc: t.servers.list.gitDesc, Icon: GitBranch },
           ].map((f) => (
             <div key={f.label} className="bg-card border border-border/50 rounded-xl p-4 text-start">
               <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center mb-3">
-                <Server className="size-4 text-muted-foreground" />
+                <f.Icon className="size-4 text-muted-foreground" />
               </div>
               <p className="text-sm font-medium text-foreground">{f.label}</p>
               <p className="text-xs text-muted-foreground mt-0.5">{f.desc}</p>

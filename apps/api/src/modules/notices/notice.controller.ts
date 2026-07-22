@@ -9,8 +9,10 @@
 
 import type { Context } from "hono";
 import { repos } from "@repo/db";
-import type { Advisory, AdvisorySeverity } from "@repo/core";
+import type { Advisory, AdvisorySeverity, AdvisoryTarget } from "@repo/core";
 import { param } from "../../lib/controller-helpers";
+
+const VALID_TARGET_TYPE = new Set<AdvisoryTarget["type"]>(["platform", "app", "project", "mail"]);
 
 const VALID_SEVERITY = new Set<AdvisorySeverity>(["critical", "recommended", "info"]);
 
@@ -30,6 +32,8 @@ function toAdvisory(n: {
   message: string;
   actionLabel: string | null;
   actionUrl: string | null;
+  targetType: string | null;
+  targetId: string | null;
 }): Advisory {
   const advisory: Advisory = {
     id: n.id,
@@ -40,6 +44,12 @@ function toAdvisory(n: {
   };
   if (n.actionLabel && n.actionUrl) {
     advisory.action = { label: n.actionLabel, kind: "open-url", url: n.actionUrl };
+  }
+  if (n.targetType && VALID_TARGET_TYPE.has(n.targetType as AdvisoryTarget["type"])) {
+    advisory.target = {
+      type: n.targetType as AdvisoryTarget["type"],
+      ...(n.targetId ? { id: n.targetId } : {}),
+    };
   }
   return advisory;
 }
@@ -64,6 +74,8 @@ export async function create(c: Context) {
       message?: string;
       actionLabel?: string;
       actionUrl?: string;
+      targetType?: string;
+      targetId?: string;
       startsAt?: string;
       endsAt?: string;
     }>()
@@ -79,12 +91,27 @@ export async function create(c: Context) {
     return c.json({ error: "title and message are required", code: "INVALID_NOTICE" }, 400);
   }
 
+  const targetType =
+    body.targetType && VALID_TARGET_TYPE.has(body.targetType as AdvisoryTarget["type"])
+      ? body.targetType
+      : null;
+
+  // actionUrl is rendered as an <a href> in the dashboard advisory UI — only
+  // allow http(s) so a stored `javascript:`/`data:` URL can't execute on click.
+  // Writes are operator/internalAuth-gated, so this is defense-in-depth.
+  const actionUrl = body.actionUrl?.trim() || null;
+  if (actionUrl && !/^https?:\/\//i.test(actionUrl)) {
+    return c.json({ error: "actionUrl must be an http(s) URL", code: "INVALID_NOTICE" }, 400);
+  }
+
   const notice = await repos.notice.create({
     severity: toSeverity(body.severity),
     title: body.title.trim(),
     message: body.message.trim(),
     actionLabel: body.actionLabel?.trim() || null,
-    actionUrl: body.actionUrl?.trim() || null,
+    actionUrl,
+    targetType,
+    targetId: targetType && targetType !== "platform" ? body.targetId?.trim() || null : null,
     active: true,
     startsAt: body.startsAt ? new Date(body.startsAt) : null,
     endsAt: body.endsAt ? new Date(body.endsAt) : null,

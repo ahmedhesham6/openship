@@ -28,6 +28,7 @@ import { projectsApi } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/api/client";
 import { Modal } from "@/components/ui/Modal";
 import { RepositoryList } from "../../../library/components/RepositoryList";
+import { AppSource } from "./AppSource";
 
 export const GitSettings = () => {
   const { gitData, refreshGit, id, projectData, updateProjectData } = useProjectSettings();
@@ -200,6 +201,13 @@ export const GitSettings = () => {
         </div>
       </div>
     );
+  }
+
+  // Release/image apps (self-app, n8n, Convex, webmail…) deploy from a release
+  // or registry tag, not a pushable git repo — show their release source +
+  // version + update instead of the git-link/webhook UI.
+  if (projectData.isApp) {
+    return <AppSource />;
   }
 
   if (!gitData.repository) {

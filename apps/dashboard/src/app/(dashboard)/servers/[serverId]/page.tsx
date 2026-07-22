@@ -4,8 +4,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
-  CheckCircle2,
-  XCircle,
   Loader2,
   Settings2,
   Trash2,
@@ -35,6 +33,7 @@ import type { ServerInfo, ComponentStatus, SetupComponentProgress, SetupLogEvent
 import { ServerForm } from "../_components/server-form";
 import { OverviewTab } from "./_components/overview-tab";
 import { ComponentsTab } from "./_components/components-tab";
+import { ServerModuleUpdates } from "./_components/module-updates";
 import { TerminalTab } from "./_components/terminal-tab";
 import {
   ConnectionBanner,
@@ -47,6 +46,10 @@ import { PortForwardingCard } from "./_components/port-forwarding-card";
 import { ServerGitHubConnect } from "@/components/github/ServerGitHubConnect";
 import { ServerMigrationWizard } from "@/components/migration/ServerMigrationWizard";
 import { usePlatform } from "@/context/PlatformContext";
+import * as CountryFlags from "country-flag-icons/react/3x2";
+
+/** ISO-3166-1 alpha-2 → flag component (same source the servers list uses). */
+const FLAGS = CountryFlags as Record<string, React.ComponentType<{ title?: string; className?: string }>>;
 
 type Tab = "overview" | "components" | "github" | "security" | "ports" | "terminal";
 type ManualActionMode = "remove" | null;
@@ -596,20 +599,30 @@ export default function ServerDetailPage({
                 {server.name || server.sshHost}
               </h1>
               {allHealthy ? (
-                <div className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 bg-success-bg text-success text-xs font-medium rounded-full">
-                  <CheckCircle2 className="size-3" />
+                <span className="shrink-0 inline-flex items-center gap-1.5 text-success text-xs font-medium">
+                  <span className="size-1.5 rounded-full bg-success" />
                   {t.servers.detail.healthy}
-                </div>
+                </span>
               ) : components.length > 0 ? (
-                <div className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 bg-warning-bg text-warning text-xs font-medium rounded-full">
-                  <XCircle className="size-3" />
+                <span className="shrink-0 inline-flex items-center gap-1.5 text-warning text-xs font-medium">
+                  <span className="size-1.5 rounded-full bg-warning" />
                   {t.servers.detail.issues}
-                </div>
+                </span>
               ) : null}
             </div>
-            <p className="text-sm text-muted-foreground/70 mt-1 font-mono">
-              {server.sshUser ?? "root"}@{server.sshHost}:{server.sshPort ?? 22}
-            </p>
+            {/* Connection line: user@host + country flag. The SSH port lives in
+                the right-hand connection card, not glued to the IP. */}
+            <div className="mt-1 flex items-center gap-2">
+              <p className="text-sm text-muted-foreground/70 font-mono">
+                {server.sshUser ?? "root"}@{server.sshHost}
+              </p>
+              {(() => {
+                const Flag = server.country ? FLAGS[server.country] : undefined;
+                return Flag ? (
+                  <Flag title={server.country ?? undefined} className="h-3.5 w-auto rounded-[2px] ring-1 ring-border/50" />
+                ) : null;
+              })()}
+            </div>
           </div>
           <div className="flex items-center gap-1.5">
             <button
@@ -710,6 +723,8 @@ export default function ServerDetailPage({
             )}
 
             {activeTab === "components" && (
+              <>
+              {serverId && <ServerModuleUpdates serverId={serverId} />}
               <ComponentsTab
                 components={components}
                 checking={checking}
@@ -733,6 +748,7 @@ export default function ServerDetailPage({
                   setManualActionFinalStatus(null);
                 }}
               />
+              </>
             )}
 
             {activeTab === "github" && serverId && (
@@ -780,6 +796,17 @@ export default function ServerDetailPage({
                   </div>
                   <span className="text-sm font-medium text-foreground font-mono truncate ms-3 max-w-[140px]">
                     {server.sshHost}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-muted/60 flex items-center justify-center">
+                      <Network className="size-4 text-muted-foreground" />
+                    </div>
+                    <span className="text-sm text-muted-foreground">{t.servers.detail.port}</span>
+                  </div>
+                  <span className="text-sm font-medium text-foreground font-mono">
+                    {server.sshPort ?? 22}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">

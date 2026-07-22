@@ -582,6 +582,27 @@ const CloudPowerPicker: React.FC = () => {
         high: { label: t.deploy.power.tierHighLabel, bestFor: t.deploy.power.tierHighBestFor },
     };
 
+    // Collapsed by default: once a tier is chosen the list folds to a single
+    // summary card; the operator expands it only to change the pick.
+    const [expanded, setExpanded] = useState(false);
+    const selectedTier = CLOUD_RESOURCE_TIERS.find((tr) => tr.id === selected);
+    const summary =
+        selected === "custom"
+            ? {
+                  label: t.deploy.power.custom,
+                  bestFor: t.deploy.power.customDesc,
+                  cpu: `${custom.cpuCores} ${t.deploy.power.vcpu}`,
+                  ram: `${custom.memoryMb} MB`,
+                  disk: `${Math.round(custom.diskMb / 1024)} GB`,
+              }
+            : {
+                  label: tierText[selected]?.label ?? selected,
+                  bestFor: tierText[selected]?.bestFor ?? "",
+                  cpu: selectedTier?.cpu ?? "",
+                  ram: selectedTier?.ram ?? "",
+                  disk: selectedTier?.disk ?? "",
+              };
+
     // Click on Custom card → open modal. Pre-selects the tier so the choice
     // sticks even if the user cancels (matches the rest of the picker:
     // clicking any tier card commits the selection). Saving from the
@@ -603,6 +624,7 @@ const CloudPowerPicker: React.FC = () => {
                             cloudResourceCustom: values,
                         });
                         hideModal(id);
+                        setExpanded(false);
                     }}
                 />
             ),
@@ -624,6 +646,32 @@ const CloudPowerPicker: React.FC = () => {
                     {t.deploy.power.subtitle}
                 </p>
             </div>
+            {!expanded ? (
+                <button
+                    type="button"
+                    onClick={() => setExpanded(true)}
+                    className="w-full rounded-xl border border-primary bg-primary/5 ring-1 ring-primary/20 p-4 text-start transition-all hover:border-primary/60 group"
+                >
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 flex items-baseline gap-2">
+                            <span className="text-sm font-semibold shrink-0 text-foreground">{summary.label}</span>
+                            <span className="text-muted-foreground/70 shrink-0">·</span>
+                            <span className="text-xs text-muted-foreground truncate">{summary.bestFor}</span>
+                        </div>
+                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground shrink-0">
+                            Change
+                            <ChevronDown className="size-3.5" />
+                        </span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground tabular-nums">
+                        <span>{summary.cpu}</span>
+                        <span className="text-muted-foreground/70">·</span>
+                        <span>{t.deploy.power.ram} {summary.ram}</span>
+                        <span className="text-muted-foreground/70">·</span>
+                        <span>{t.deploy.power.disk} {summary.disk}</span>
+                    </div>
+                </button>
+            ) : (
             <div className="space-y-2">
                 {CLOUD_RESOURCE_TIERS.map((tier) => {
                     const isSelected = selected === tier.id;
@@ -631,7 +679,7 @@ const CloudPowerPicker: React.FC = () => {
                         <button
                             key={tier.id}
                             type="button"
-                            onClick={() => updateConfig({ cloudResourceTier: tier.id })}
+                            onClick={() => { updateConfig({ cloudResourceTier: tier.id }); setExpanded(false); }}
                             className={`w-full rounded-xl border p-4 text-start transition-all ${
                                 isSelected
                                     ? "border-primary bg-primary/5 ring-1 ring-primary/20"
@@ -711,6 +759,7 @@ const CloudPowerPicker: React.FC = () => {
                     </div>
                 </button>
             </div>
+            )}
         </div>
     );
 };
@@ -1082,13 +1131,21 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
   const showCloneStrategy =
     config.deployTarget === "server" &&
     (config.runtimeMode === "docker" || isServiceDeployment);
-  const cloneStrategy: CloneStrategy = config.cloneStrategy ?? "api-host";
+  // Clone-on-server is the default (primary card); cloning on the api host and
+  // uploading is the advanced/manual alternative.
+  const cloneStrategy: CloneStrategy = config.cloneStrategy ?? "server";
   const cloneOptions: Array<{
     value: CloneStrategy;
     icon: React.ReactNode;
     label: string;
     description: string;
   }> = [
+    {
+      value: "server",
+      icon: <GitBranch className="size-5" />,
+      label: ts.clone.serverLabel,
+      description: ts.clone.serverDesc,
+    },
     {
       value: "api-host",
       // The "api host" is the machine running Openship: the user's own device in
@@ -1100,13 +1157,42 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
         ? ts.clone.apiHostDesktopDesc
         : ts.clone.apiHostServerDesc,
     },
-    {
-      value: "server",
-      icon: <GitBranch className="size-5" />,
-      label: ts.clone.serverLabel,
-      description: ts.clone.serverDesc,
-    },
   ];
+
+  // Whether the selected server's SSH auth can host the credential-forwarding
+  // relay. The relay is desktop-only and can't run over agent auth, so we only
+  // default forwarding on for key/password servers — an agent server falls back
+  // to a stored credential (per-server GitHub / App / PAT) or the backend's
+  // graceful degrade to an api-host clone, never the relay hard-fail.
+  const selectedServerAuth = servers.find((s) => s.id === config.serverId)?.sshAuthMethod ?? null;
+  const relayCapable = selectedServerAuth === "key" || selectedServerAuth === "password";
+  // Single source of truth for "forward the git credential for a server clone":
+  // relay is desktop-only and can't run over agent auth. Both the default effect
+  // and the manual clone-card pick read this, so they can never drift.
+  const canForwardServerClone = isDesktop && relayCapable;
+
+  // Default the clone location to "on the server" and keep the forward flag in
+  // sync with the server's relay capability. Only for a brand-new deploy — a
+  // saved project keeps its stored choice.
+  useEffect(() => {
+    if (config.projectId) return;
+    if (!showCloneStrategy) return;
+    const clone: CloneStrategy = config.cloneStrategy ?? "server";
+    const wantForward = clone === "server" && canForwardServerClone;
+    const patch: { cloneStrategy?: CloneStrategy; forwardGitCredentials?: boolean } = {};
+    if (config.cloneStrategy == null) patch.cloneStrategy = clone;
+    if ((config.forwardGitCredentials === true) !== wantForward) {
+      patch.forwardGitCredentials = wantForward ? true : undefined;
+    }
+    if (Object.keys(patch).length > 0) updateConfig(patch);
+  }, [
+    config.projectId,
+    showCloneStrategy,
+    config.cloneStrategy,
+    config.forwardGitCredentials,
+    canForwardServerClone,
+    updateConfig,
+  ]);
 
   // Advanced-panel summary line (build location). Clone location has its own
   // right-panel picker, so it isn't summarized here.
@@ -1495,7 +1581,12 @@ const DeployTargetStep: React.FC<DeployTargetStepProps> = ({ targets, onContinue
                             onSelect={() =>
                               updateConfig({
                                 cloneStrategy: opt.value,
-                                forwardGitCredentials: opt.value === "server" && isDesktop,
+                                // Only forward when the relay can actually run
+                                // (desktop + key/password auth); otherwise leave
+                                // it off so an agent server degrades instead of
+                                // hitting the relay hard-fail.
+                                forwardGitCredentials:
+                                  opt.value === "server" && canForwardServerClone,
                               })
                             }
                             icon={opt.icon}

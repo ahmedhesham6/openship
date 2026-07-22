@@ -91,13 +91,17 @@ async function readComposeDeclarations(
 export async function discoverServerStack(
   serverId: string,
   organizationId: string,
+  onProgress?: (message: string) => void,
 ): Promise<DiscoveredStack> {
+  const step = (m: string) => onProgress?.(m);
+  step("Connecting to Docker…");
   const rt = await createServerDockerRuntime(serverId, organizationId);
   try {
     if (!(await rt.ping())) {
       throw new Error("Docker daemon is not reachable on this server.");
     }
 
+    step("Listing containers, volumes and networks…");
     const [containers, volumes, networks] = await Promise.all([
       rt.listAllContainers(),
       rt.listAllVolumes(),
@@ -112,6 +116,7 @@ export async function discoverServerStack(
     const managed = containers.filter((c) => isOpenshipOwned(c.labels));
     const candidates = containers.filter((c) => !isOpenshipOwned(c.labels));
 
+    step(`Inspecting ${candidates.length} container(s)…`);
     const details = (
       await mapLimit(candidates, 5, (c) => rt.inspectContainer(c.id))
     ).filter((d): d is DockerContainerDetail => d !== null);
@@ -126,6 +131,7 @@ export async function discoverServerStack(
       groups.set(key, list);
     }
 
+    step("Reading compose files…");
     const declared = await readComposeDeclarations(serverId, groups);
 
     // Fetch each distinct image's baked-in env once, so discovery can subtract

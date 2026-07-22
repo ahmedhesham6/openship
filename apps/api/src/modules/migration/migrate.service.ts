@@ -17,7 +17,7 @@
 import { repos } from "@repo/db";
 import { ensureProject } from "../projects/project-crud.service";
 import { discoverServerStack } from "./docker-inspect.service";
-import type { DiscoveredVolumeMount } from "./docker-reconcile";
+import { EDGE_PORTS, parseComposePort, type DiscoveredVolumeMount } from "./docker-reconcile";
 
 type EnsureBody = Parameters<typeof ensureProject>[0];
 type ParsedComposeList = Parameters<typeof repos.service.syncFromCompose>[1];
@@ -38,6 +38,19 @@ function volumeToComposeString(v: DiscoveredVolumeMount): string | null {
   return `${v.source}:${v.target}${mode}`;
 }
 
+/** Ports 80/443 belong to Openship's OpenResty edge. For an imported service
+ *  that published one, drop the host side (and any host IP) but KEEP the
+ *  container port so OpenResty can still route to it — e.g. "80:3000" → "3000",
+ *  "443:443" → "443". Non-edge host ports (e.g. "8080:80") are untouched. */
+function stripEdgeHostPorts(ports: string[]): string[] {
+  return ports.map((spec) => {
+    const { host, container, proto } = parseComposePort(spec);
+    if (host == null || !EDGE_PORTS.has(host)) return spec;
+    return proto ? `${container}/${proto}` : container;
+  });
+}
+
+
 export async function adoptServerStack(opts: {
   serverId: string;
   organizationId: string;
@@ -52,12 +65,33 @@ export async function adoptServerStack(opts: {
 
   const stack = await discoverServerStack(serverId, organizationId);
   const selected = new Set(serviceNames);
-  const chosen = stack.services.filter((s) => selected.has(s.name));
+  // Drop the edge proxy (traefik/nginx/… on 80/443): OpenResty replaces it, so
+  // adopting it would just replay the 80/443 conflict. Defense-in-depth — the
+  // wizard already marks it non-importable and the orchestrator filters it too.
+  const chosen = stack.services.filter((s) => selected.has(s.name) && !s.proxyKind);
   if (chosen.length === 0) {
     throw new Error("None of the selected services were found on the server.");
   }
 
-  const anyBuild = chosen.some((s) => Boolean(s.build));
+  // Cross-server can't move a LOCALLY-BUILT image: it isn't in a registry, so a
+  // different target host has nothing to pull. Registry-image stacks migrate
+  // across servers fine (the target pulls them); built ones must be taken over
+  // IN PLACE (same server, where the built image already exists). Moving built
+  // images across hosts (docker save|load stream) is coming soon.
+  if (!sameServer) {
+    const built = chosen.filter((s) => Boolean(s.build)).map((s) => s.name);
+    if (built.length > 0) {
+      throw new Error(
+        `Cross-server migration can't move locally-built images yet (${built.join(", ")}). ` +
+          `Take these over in place (migrate to the same server), or rebuild them from a registry image. Cross-server for built images is coming soon.`,
+      );
+    }
+  }
+
+  // Only a container with NO resolvable image genuinely needs a build source.
+  // A container that was originally built from source still RUNS an image on the
+  // host, so we adopt that image rather than rebuild — see the mapping below.
+  const anyBuild = chosen.some((s) => !s.image && Boolean(s.build));
   const ensureBody: EnsureBody = {
     name: projectName,
     projectType: "services",
@@ -66,16 +100,42 @@ export async function adoptServerStack(opts: {
   };
   const { project_id, created } = await ensureProject(ensureBody, organizationId);
 
-  const parsed: ParsedComposeList = chosen.map((s) => ({
-    name: s.name,
-    kind: "compose",
-    // A service that builds keeps its build context; otherwise adopt the image.
-    image: s.build ? undefined : s.image,
-    build: s.build,
-    dockerfile: s.dockerfile,
-    ports: s.ports,
+  // Service names must be unique within a project, but two adopted containers
+  // can share a name (a standalone `postgres` + a compose `postgres`). Uniquify
+  // with a numeric suffix so neither silently overwrites the other on sync, and
+  // remap dependsOn to the first service that carried each original name.
+  const nameCounts = new Map<string, number>();
+  const firstUnique = new Map<string, string>();
+  const uniqueNames = chosen.map((s) => {
+    const n = (nameCounts.get(s.name) ?? 0) + 1;
+    nameCounts.set(s.name, n);
+    const unique = n === 1 ? s.name : `${s.name}-${n}`;
+    if (!firstUnique.has(s.name)) firstUnique.set(s.name, unique);
+    return unique;
+  });
+
+  const parsed: ParsedComposeList = chosen.map((s, i) => ({
+    name: uniqueNames[i],
+    kind: "compose" as const,
+    // Adoption takes the running container AS-IS via its current image — we
+    // don't have its original build source, so we never carry a build context
+    // (which would make the deploy try to rebuild-from-source and fail preflight
+    // with "repository URL or local path"). Only an image-less container (rare)
+    // falls back to its build context.
+    image: s.image,
+    build: s.image ? undefined : s.build,
+    dockerfile: s.image ? undefined : s.dockerfile,
+    ports: stripEdgeHostPorts(s.ports),
+    // Left UNEXPOSED on purpose: an exposed free service would synthesize a
+    // subdomain route (usesManagedRouting is true for a self-hosted server
+    // deploy), which fires the routing/OpenResty ensure DURING migration — and
+    // self-hosted free domains need the cloud edge, so it'd fail preflight (or,
+    // with a foreign proxy present, raise the takeover prompt the wizard can't
+    // surface → timeout). The user routes each service from the project's
+    // Domains tab (Add route → exposes it) afterwards; that redeploy ensures
+    // OpenResty and reclaims 80/443 via the consent modal.
     // Only keep dependencies on services we're also adopting.
-    dependsOn: s.dependsOn.filter((d) => selected.has(d)),
+    dependsOn: s.dependsOn.filter((d) => selected.has(d)).map((d) => firstUnique.get(d) ?? d),
     environment: s.env,
     volumes: s.volumes
       .map(volumeToComposeString)

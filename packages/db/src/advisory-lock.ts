@@ -1,5 +1,9 @@
 import { getDriver, getPgPool } from "./client";
 
+export interface AdvisoryLockHandle {
+  release(): Promise<void>;
+}
+
 /**
  * 31-bit signed-positive int hash of a string identity, for Postgres advisory
  * lock keys. `pg_advisory_lock` takes a bigint; hashing a string identity down
@@ -46,4 +50,46 @@ export async function withAdvisoryLock<T>(scopeKey: string, fn: () => Promise<T>
   } finally {
     client.release();
   }
+}
+
+/**
+ * Try to acquire a session-level advisory lock without waiting. The returned
+ * handle owns its pooled connection until release, so callers can hold the lock
+ * across lifecycles that outlive a single awaited function (for example SSE).
+ */
+export async function tryAcquireAdvisoryLock(scopeKey: string): Promise<AdvisoryLockHandle | null> {
+  if (getDriver() === "pglite") {
+    return { release: async () => {} };
+  }
+
+  const key = hashStringToInt(scopeKey);
+  const client = await getPgPool().connect();
+  try {
+    const result = await client.query<{ acquired: boolean }>(
+      "SELECT pg_try_advisory_lock($1) AS acquired",
+      [key],
+    );
+    if (result.rows[0]?.acquired !== true) {
+      client.release();
+      return null;
+    }
+  } catch (err) {
+    client.release();
+    throw err;
+  }
+
+  let released = false;
+  return {
+    release: async () => {
+      if (released) return;
+      released = true;
+      try {
+        await client.query("SELECT pg_advisory_unlock($1)", [key]);
+      } catch (err) {
+        client.release(err instanceof Error ? err : new Error(String(err)));
+        throw err;
+      }
+      client.release();
+    },
+  };
 }

@@ -126,6 +126,21 @@ export const instanceSettings = pgTable("instance_settings", {
    */
   migrationStartedAt: timestamp("migration_started_at"),
 
+  // ── Email / SMTP transport ──────────────────────────────────────────────────
+  //
+  // Operator-configured SMTP used for ALL instance-sent mail — password reset,
+  // email verification, team invites, and notifications. When set, this is the
+  // highest-priority source in `lib/mail.ts` (above the provisioned mail-server
+  // platform mailbox and the static env SMTP). Instance-wide, matching the auth
+  // layer's scope. The password is encrypted at rest (`lib/encryption`) and is
+  // NEVER returned to the client (masked on read). All-null = not configured.
+  smtpHost: text("smtp_host"),
+  smtpPort: integer("smtp_port"),
+  smtpUser: text("smtp_user"),
+  smtpPasswordEncrypted: text("smtp_password_encrypted"),
+  /** From header, e.g. "Openship <no-reply@example.com>". Falls back to smtpUser. */
+  smtpFrom: text("smtp_from"),
+
   // ── Timestamps ─────────────────────────────────────────────────────────────
 
   createdAt: timestamp("created_at").notNull().defaultNow(),

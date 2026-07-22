@@ -242,8 +242,15 @@ export const serviceDeployment = pgTable(
      * "why we DID build" side of the answer.
      */
     reasonSkipped: text("reason_skipped"),
-    /** Resolved image reference (pulled or built) */
+    /** Resolved image reference (pulled or built) — the TAG, e.g. `n8nio/n8n:latest`. */
     imageRef: text("image_ref"),
+    /**
+     * Content-addressable digest of the image actually running, e.g.
+     * `n8nio/n8n@sha256:…`. Captured from the container's RepoDigests at deploy.
+     * This is the anchor that lets the update scanner detect a moved mutable tag
+     * (`:latest`/`:1`) — `imageRef` alone can't, since the tag string is unchanged.
+     */
+    imageDigest: text("image_digest"),
     /** Mapped host port */
     hostPort: integer("host_port"),
     /** Internal network IP */

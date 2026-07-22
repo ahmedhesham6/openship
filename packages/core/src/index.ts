@@ -13,5 +13,6 @@ export * from "./languages";
 export * from "./metadata";
 export * from "./mail-server";
 export * from "./app-templates";
+export * from "./app-settings";
 export * from "./project-source";
 export * from "./updates";

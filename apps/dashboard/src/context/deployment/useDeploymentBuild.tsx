@@ -721,11 +721,15 @@ export function useDeploymentBuild(
           config.deployTarget === "server" && config.forwardGitCredentials === true
             ? true
             : undefined,
-        // Clone location — only meaningful for a server target. Default
-        // "api-host" is left implicit (undefined) so the backend keeps today's
-        // clone-on-orchestrator behavior unless the user opted into "server".
+        // Clone location — only meaningful for a server target. Clone-on-server
+        // is now the DEFAULT (secure, atomic: credential forwarded over the SSH
+        // relay for the clone, never stored). Only an explicit "api-host" pick
+        // (the advanced "clone on your device, then upload" option) sends
+        // undefined so the backend clones on the orchestrator. The backend
+        // degrades a server clone back to api-host if no credential can reach
+        // the build host, so this default can never block a deploy.
         cloneStrategy:
-          config.deployTarget === "server" && config.cloneStrategy === "server"
+          config.deployTarget === "server" && config.cloneStrategy !== "api-host"
             ? "server"
             : undefined,
         runtimeMode:

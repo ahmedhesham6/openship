@@ -17,7 +17,9 @@ import type {
   DockerNetworkInfo,
   DockerPortBinding,
   DockerVolumeInfo,
+  ProxyKind,
 } from "@repo/adapters";
+import { classifyProxy } from "@repo/adapters";
 import type { ComposeHealthcheck } from "@repo/core";
 import type { ComposeService } from "../../lib/compose-parser";
 
@@ -52,6 +54,14 @@ export interface DiscoveredService {
   command?: string;
   restart?: string;
   healthcheck?: ComposeHealthcheck;
+  /** Reverse-proxy kind when this container IS the edge proxy (image/command
+   *  matches AND it binds a host edge port). Openship's OpenResty replaces it,
+   *  so it's dropped from import — importing it is the 80/443 conflict. */
+  proxyKind?: ProxyKind;
+  /** Host edge ports (80/443) this service publishes. Reserved for OpenResty:
+   *  stripped from an imported non-proxy service; the signal that a proxy owns
+   *  the edge. */
+  edgePorts?: number[];
   warnings: string[];
 }
 
@@ -118,8 +128,11 @@ function portsToComposeStrings(ports: DockerPortBinding[]): string[] {
   const seen = new Set<string>();
   for (const p of ports) {
     const proto = p.type && p.type !== "tcp" ? `/${p.type}` : "";
+    // Preserve a non-wildcard host IP (e.g. a 127.0.0.1-only publish) so the
+    // redeploy doesn't silently widen a loopback binding to all interfaces.
+    const hostIp = p.ip && p.ip !== "0.0.0.0" && p.ip !== "::" ? `${p.ip}:` : "";
     const spec = p.publicPort
-      ? `${p.publicPort}:${p.privatePort}${proto}`
+      ? `${hostIp}${p.publicPort}:${p.privatePort}${proto}`
       : `${p.privatePort}${proto}`;
     if (!seen.has(spec)) {
       seen.add(spec);
@@ -127,6 +140,36 @@ function portsToComposeStrings(ports: DockerPortBinding[]): string[] {
     }
   }
   return out;
+}
+
+/** The host ports Openship's OpenResty edge owns — never re-published by an
+ *  imported workload. */
+export const EDGE_PORTS = new Set([80, 443]);
+
+/** Parse a compose "host:container[/proto]" (or bare "container") port spec.
+ *  `host` is the published host port (null for a bare container port — no host
+ *  publish). Single source of truth for both edge detection and stripping;
+ *  tolerates an optional host IP ("127.0.0.1:80:80"). */
+export function parseComposePort(spec: string): {
+  host: number | null;
+  container: string;
+  proto?: string;
+} {
+  const [hostAndPorts, proto] = spec.split("/");
+  const parts = hostAndPorts.split(":");
+  const container = parts[parts.length - 1];
+  const host = parts.length >= 2 ? Number(parts[parts.length - 2]) : NaN;
+  return { host: Number.isFinite(host) ? host : null, container, proto };
+}
+
+/** Host edge ports (80/443) a service publishes — the conflict signal. */
+function edgePortsFromCompose(ports: string[]): number[] {
+  const found = new Set<number>();
+  for (const spec of ports) {
+    const { host } = parseComposePort(spec);
+    if (host != null && EDGE_PORTS.has(host)) found.add(host);
+  }
+  return [...found];
 }
 
 function toDiscoveredMounts(mounts: DockerMount[]): DiscoveredVolumeMount[] {
@@ -197,16 +240,29 @@ export function toDiscoveredService(
     declared?.advanced?.healthcheck ??
     (detail.healthcheck ? inspectHealthcheckToCompose(detail.healthcheck) : undefined);
 
+  const name = declared?.name ?? detail.composeService ?? detail.name;
+  const image = detail.image || declared?.image;
+  const ports = portsToComposeStrings(detail.ports);
+
+  // A container is the EDGE proxy only when it both publishes a host edge port
+  // AND classifies as a proxy — so an internal `nginx` sidecar (no 80/443) is
+  // left alone and only the thing actually holding the edge is dropped.
+  const edgePorts = edgePortsFromCompose(ports);
+  const proxyKind =
+    edgePorts.length > 0
+      ? classifyProxy([image, command, name].filter(Boolean).join(" "))
+      : undefined;
+
   return {
-    name: declared?.name ?? detail.composeService ?? detail.name,
+    name,
     source: declared ? "compose" : "container",
     containerId: detail.id,
     containerName: detail.name,
     running: detail.state === "running",
-    image: detail.image || declared?.image,
+    image,
     build: declared?.build,
     dockerfile: declared?.dockerfile,
-    ports: portsToComposeStrings(detail.ports),
+    ports,
     env: envArrayToRecord(detail.env, imageDefaults),
     volumes: mounts,
     networks: detail.networks,
@@ -214,6 +270,8 @@ export function toDiscoveredService(
     command,
     restart: detail.restart?.name || declared?.restart,
     healthcheck,
+    proxyKind,
+    edgePorts: edgePorts.length > 0 ? edgePorts : undefined,
     warnings,
   };
 }

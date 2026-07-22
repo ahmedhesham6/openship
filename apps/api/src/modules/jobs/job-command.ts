@@ -9,8 +9,10 @@
  * Advanced policies handled here:
  *   - timeout    Promise.race against the stream (best-effort; can't kill the
  *                remote process, but frees the run + connection).
- *   - retry      up to maxAttempts, one job_run row per attempt (so history
- *                shows each try), backoffSeconds between.
+ *   - retry      up to maxAttempts into ONE aggregate run row (attempts append
+ *                to its output + are counted in summary.attempts), backoffSeconds
+ *                between — so run-now's returned run id + its SSE stream span
+ *                every attempt to the final outcome.
  *   - env/secrets  merged + shell-quoted `export`s prepended (secrets decrypted
  *                  at run time; never stored or logged in plaintext).
  *   - multi-server  fan out across servers in parallel within one run, each
@@ -88,13 +90,17 @@ async function runOnServer(
   }
 }
 
-/** Execute ONE attempt into an open run row (fanning out across servers if
- *  configured). Finishes the row + publishes the terminal SSE. Never throws. */
-async function executeAttempt(row: Job, run: JobRun, cfg: CommandConfig): Promise<JobRunState> {
-  const startedMs = Date.now();
-  let output = "";
+/** Execute ONE attempt, streaming each line to `streamId` (the stable aggregate
+ *  run id), fanning out across servers if configured. Returns the attempt's
+ *  status + captured output; does NOT finish the row or publish `complete` —
+ *  runLoop owns the single aggregate run so one id + one SSE stream span every
+ *  retry. Never throws. */
+async function executeAttempt(
+  cfg: CommandConfig,
+  streamId: string,
+): Promise<{ status: JobRunState; output: string; error?: string }> {
   const publish = (line: string, level: LogEntry["level"]) =>
-    jobRunBus.publish(run.id, { type: "log", line, level });
+    jobRunBus.publish(streamId, { type: "log", line, level });
   try {
     const servers = resolveServerIds(cfg);
     if (!servers.length || !cfg.command?.trim()) {
@@ -103,6 +109,7 @@ async function executeAttempt(row: Job, run: JobRun, cfg: CommandConfig): Promis
     const command = buildCommand(cfg);
 
     let code: number;
+    let output: string;
     if (servers.length === 1) {
       const r = await withTimeout(runOnServer(servers[0], command, (e) => publish(e.message, e.level)), cfg.timeoutMs);
       output = r.output;
@@ -127,63 +134,65 @@ async function executeAttempt(row: Job, run: JobRun, cfg: CommandConfig): Promis
       output = results.map((r) => `── ${r.sid} (exit ${r.code}) ──\n${r.output}`).join("\n\n");
     }
 
-    const status: JobRunState = code === 0 ? "success" : "failed";
-    await repos.jobRun.finish(run.id, {
-      status,
-      durationMs: Date.now() - startedMs,
-      summary: { exitCode: code },
-      output: output.slice(0, MAX_OUTPUT),
-      error: status === "failed" ? `Command exited with code ${code}` : undefined,
-    });
-    jobRunBus.publish(run.id, { type: "complete", status });
-    return status;
+    return code === 0
+      ? { status: "success", output }
+      : { status: "failed", output, error: `Command exited with code ${code}` };
   } catch (err) {
     const message = safeErrorMessage(err);
-    await repos.jobRun.finish(run.id, {
-      status: "failed",
-      durationMs: Date.now() - startedMs,
-      output: output.slice(0, MAX_OUTPUT),
-      error: message,
-    });
-    jobRunBus.publish(run.id, { type: "complete", status: "failed", error: message });
-    return "failed";
+    publish(message, "error");
+    return { status: "failed", output: message, error: message };
   }
 }
 
-/** Run a job with retries: emit `running`, execute attempts (one run row each)
- *  until success or exhaustion, emit the terminal state, then fire dependents. */
-async function runLoop(row: Job, firstRun: JobRun): Promise<void> {
+/** Run a job with retries into the SINGLE run row `run`: emit `running`, execute
+ *  attempts (all streaming to the same run id), finish the row ONCE with the
+ *  final status + aggregated output + attempt count, publish one terminal
+ *  `complete`, emit the terminal state, then fire dependents. The run id is
+ *  stable across retries, so run-now's caller + its SSE stream follow through to
+ *  the final outcome. */
+async function runLoop(row: Job, run: JobRun): Promise<void> {
   const cfg = (row.actionConfig ?? {}) as CommandConfig;
   const maxAttempts = Math.max(1, cfg.retry?.maxAttempts ?? 1);
   const backoffMs = Math.max(0, (cfg.retry?.backoffSeconds ?? 0) * 1000);
+  const startedMs = Date.now();
 
-  await emitJobRun(row, firstRun.id, "running");
+  await emitJobRun(row, run.id, "running");
 
-  let run = firstRun;
   let finalStatus: JobRunState = "failed";
-  let lastRunId = firstRun.id;
-  const single = primaryServerId(cfg);
+  let exitCode = 1;
+  let lastError: string | undefined;
+  let attemptsUsed = 0;
+  const chunks: string[] = [];
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    attemptsUsed = attempt;
     if (attempt > 1) {
-      run = await repos.jobRun.start({
-        jobId: row.key,
-        kind: "custom",
-        trigger: firstRun.trigger,
-        attempt,
-        serverId: single,
-      });
+      const marker = `── retry ${attempt}/${maxAttempts} ──`;
+      jobRunBus.publish(run.id, { type: "log", line: marker, level: "info" });
+      chunks.push(marker);
     }
-    lastRunId = run.id;
-    const status = await executeAttempt(row, run, cfg);
-    if (status === "success") {
+    const res = await executeAttempt(cfg, run.id);
+    chunks.push(res.output);
+    if (res.status === "success") {
       finalStatus = "success";
+      exitCode = 0;
+      lastError = undefined;
       break;
     }
+    lastError = res.error;
     if (attempt < maxAttempts && backoffMs) await sleep(backoffMs);
   }
 
-  await emitJobRun(row, lastRunId, finalStatus);
+  await repos.jobRun.finish(run.id, {
+    status: finalStatus,
+    durationMs: Date.now() - startedMs,
+    summary: { exitCode, attempts: attemptsUsed },
+    output: chunks.join("\n").slice(0, MAX_OUTPUT),
+    error: finalStatus === "failed" ? lastError ?? "Command failed" : undefined,
+  });
+  jobRunBus.publish(run.id, { type: "complete", status: finalStatus, error: lastError });
+
+  await emitJobRun(row, run.id, finalStatus);
   if (finalStatus === "success") await fireDependents(row.key);
 }
 

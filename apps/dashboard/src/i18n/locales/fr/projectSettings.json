@@ -4,6 +4,26 @@
     "save": "Enregistrer",
     "cancel": "Annuler"
   },
+  "appSettings": {
+    "modeApp": "Paramètres de l'application",
+    "modeDeployment": "Déploiement",
+    "saveChanges": "Enregistrer les modifications",
+    "saving": "Enregistrement…",
+    "saved": "Paramètres enregistrés",
+    "saveHint": "Enregistrez pour conserver ces modifications — elles s'appliqueront au prochain déploiement de l'application.",
+    "applyNow": "Appliquer maintenant",
+    "applying": "Application…",
+    "applied": "Application des modifications",
+    "restartNote": "Appliquez maintenant pour redémarrer l'application avec les nouveaux paramètres, sinon ils prendront effet au prochain déploiement.",
+    "redeployNote": "L'application de ces modifications recrée l'application — vous devrez peut-être ensuite vous réauthentifier sur son tableau de bord ou sa CLI.",
+    "advancedShow": "Afficher les options avancées",
+    "advancedHide": "Masquer les options avancées",
+    "secretSet": "Défini — laissez vide pour conserver la valeur actuelle",
+    "loadError": "Impossible de charger les paramètres de l'application.",
+    "saveFailed": "Impossible d'enregistrer les paramètres.",
+    "applyFailed": "Impossible d'appliquer les modifications.",
+    "unmanaged": "Cette application n'a pas encore de paramètres configurables."
+  },
   "advanced": {
     "projectInfo": {
       "title": "Informations du projet",
@@ -173,8 +193,16 @@
       "saved": "Variables d'environnement enregistrées",
       "savedTitle": "Enregistré",
       "saveFailed": "Échec de l'enregistrement des variables d'environnement",
-      "saveFailedTitle": "Échec de l'enregistrement"
-    }
+      "saveFailedTitle": "Échec de l'enregistrement",
+      "applying": "Redémarrage du service avec le nouvel environnement — sans recompilation.",
+      "applyingTitle": "Application",
+      "applyFailed": "Impossible d'appliquer l'environnement au service en cours",
+      "applyFailedTitle": "Échec de l'application"
+    },
+    "close": "Fermer",
+    "applyTitle": "Appliquer sans recompilation",
+    "applyText": "Enregistré. Appliquez-les au service en cours — il redémarre avec le nouvel environnement, sans clonage ni recompilation.",
+    "applyButton": "Appliquer (redémarrage, sans recompilation)"
   },
   "gitInfo": {
     "repository": "Dépôt",
@@ -337,11 +365,26 @@
     "title": "Puissance de la machine",
     "description": "Configurez la puissance de la machine pour votre projet.",
     "tiers": {
-      "lightweight": { "name": "Léger", "description": "Petites applications et sites statiques" },
-      "standard": { "name": "Standard", "description": "La plupart des applications web" },
-      "performance": { "name": "Performance", "description": "Applications à fort trafic" },
-      "enterprise": { "name": "Entreprise", "description": "Applications de production à grande échelle" },
-      "autoscale": { "name": "Mise à l'échelle automatique", "description": "S'adapte en fonction de la demande" }
+      "lightweight": {
+        "name": "Léger",
+        "description": "Petites applications et sites statiques"
+      },
+      "standard": {
+        "name": "Standard",
+        "description": "La plupart des applications web"
+      },
+      "performance": {
+        "name": "Performance",
+        "description": "Applications à fort trafic"
+      },
+      "enterprise": {
+        "name": "Entreprise",
+        "description": "Applications de production à grande échelle"
+      },
+      "autoscale": {
+        "name": "Mise à l'échelle automatique",
+        "description": "S'adapte en fonction de la demande"
+      }
     },
     "dynamic": "Dynamique",
     "custom": {
@@ -450,7 +493,9 @@
       "provisioning": "Provisionnement",
       "expired": "Expiré",
       "error": "Erreur",
-      "inactive": "Inactif"
+      "inactive": "Inactif",
+      "external": "TLS externe",
+      "manual": "Certificat manuel"
     },
     "typeCustom": "Domaine personnalisé",
     "typeFree": "Sous-domaine gratuit",
@@ -496,7 +541,13 @@
       "includeWwwDesc": "Générer également des enregistrements pour www.{domain}",
       "includeWwwFallback": "votredomaine.com",
       "adding": "Ajout...",
-      "submit": "Ajouter un domaine"
+      "submit": "Ajouter un domaine",
+      "servesPath": "Sert le chemin",
+      "servesPathHint": "Les requêtes vers ce domaine sont servies depuis ce chemin dans la sortie de compilation.",
+      "servesPathRedeploy": "Les nouveaux chemins prennent effet au prochain déploiement.",
+      "externalIngress": "Ingress et TLS externes",
+      "externalIngressDesc": "Le TLS se termine en amont (Cloudflare Tunnel, équilibreur de charge). Vérification par TXT uniquement — le domaine n'a pas besoin de pointer vers ce serveur, et nous n'émettrons pas de certificat.",
+      "noWww": "Saisissez le domaine sans « www. » — activez « Inclure www » ci-dessous pour l'ajouter."
     },
     "dns": {
       "title": "Enregistrements DNS",
@@ -558,7 +609,8 @@
       "renewing": "Renouvellement...",
       "renewSsl": "Renouveler le SSL",
       "rechecking": "Nouvelle vérification...",
-      "recheckSsl": "Revérifier le SSL"
+      "recheckSsl": "Revérifier le SSL",
+      "uploadCert": "Importer un certificat"
     },
     "toast": {
       "enterPort": "Saisissez le port vers lequel ce domaine doit router (1–65535).",
@@ -589,7 +641,66 @@
       "enterPortShort": "Saisissez le port vers lequel ce domaine doit router.",
       "noServicePort": "Aucun service ne publie le port {port}. Ajoutez d'abord ce port à un service.",
       "enterCustom": "Saisissez un domaine personnalisé.",
-      "enterSubdomain": "Saisissez un sous-domaine."
+      "enterSubdomain": "Saisissez un sous-domaine.",
+      "certUploaded": "Certificat installé pour {hostname}.",
+      "certUploadFailed": "Échec de l'installation du certificat pour {hostname}."
+    },
+    "records": {
+      "toggle": "Enregistrements DNS",
+      "hint": "Ajoutez-les chez votre fournisseur DNS, puis cliquez sur Vérifier.",
+      "loading": "Chargement des enregistrements…",
+      "none": "Aucun enregistrement à ajouter pour ce domaine."
+    },
+    "verifyMissing": {
+      "both": "Ni le CNAME ni le TXT ne sont encore résolus — ajoutez les enregistrements ci-dessous, attendez la propagation DNS, puis Vérifiez.",
+      "cname": "L'enregistrement CNAME n'est pas encore résolu — ajoutez-le ci-dessous, attendez la propagation DNS, puis Vérifiez.",
+      "txt": "L'enregistrement TXT de vérification n'est pas encore résolu — ajoutez-le ci-dessous, attendez la propagation DNS, puis Vérifiez."
+    },
+    "portHint": {
+      "body": "Aucune réponse sur le port {port} — les requêtes peuvent renvoyer une erreur 502 tant que l'application n'écoute pas dessus.",
+      "bodyService": "Service « {service} » : aucune réponse sur le port {port} — les requêtes peuvent renvoyer une erreur 502 tant qu'il n'écoute pas dessus."
+    },
+    "outputHint": {
+      "body": "Aucune sortie de compilation trouvée à {path} — vérifiez votre répertoire de sortie et redéployez."
+    },
+    "certUpload": {
+      "title": "Importer un certificat",
+      "desc": "Servez le TLS avec votre propre certificat (apportez le vôtre ou Cloudflare Origin CA) au lieu de Let's Encrypt. Utilisez ceci lorsqu'un proxy en amont front ce domaine et que l'origine a toujours besoin d'un vrai certificat (Cloudflare Full-strict). Certbot est désactivé pour ce domaine une fois un certificat importé — renouvelez en en important un nouveau.",
+      "certLabel": "Certificat (fullchain PEM)",
+      "certPlaceholder": "-----BEGIN CERTIFICATE-----",
+      "keyLabel": "Clé privée (PEM)",
+      "keyPlaceholder": "-----BEGIN PRIVATE KEY-----",
+      "submit": "Installer le certificat",
+      "submitting": "Installation...",
+      "close": "Annuler"
     }
+  },
+  "routeRules": {
+    "title": "Règles de route",
+    "description": "Limitation de débit, bannissement et règles d'autorisation/refus appliquées à la périphérie — instantanément, sans redéploiement.",
+    "loading": "Chargement des règles…",
+    "empty": "Aucune règle de route pour le moment. Ajoutez-en une ci-dessous.",
+    "allHosts": "Tous les noms d'hôte",
+    "allPaths": "Tous les chemins",
+    "addTitle": "Ajouter une règle",
+    "pathLabel": "Préfixe de chemin (optionnel)",
+    "rps": "Requêtes / sec",
+    "burst": "Rafale",
+    "methods": "Autoriser uniquement les méthodes",
+    "banIps": "Bannir des IP / CIDR",
+    "banCountries": "Bannir des pays (ISO)",
+    "allowCountries": "Autoriser uniquement des pays (ISO)",
+    "denyCidrs": "Refuser des CIDR",
+    "allowReferers": "Hotlink : autoriser les referers",
+    "banUserAgents": "Bannir des user-agents (sous-chaîne)",
+    "blockEmptyUa": "Bloquer les user-agents vides",
+    "blockStatus": "Code de réponse de blocage",
+    "add": "Ajouter la règle",
+    "remove": "Supprimer",
+    "enabled": "Activée",
+    "disabled": "Désactivée",
+    "saved": "Règle enregistrée",
+    "saveFailed": "Échec de l'enregistrement de la règle",
+    "loadFailed": "Échec du chargement des règles"
   }
 }

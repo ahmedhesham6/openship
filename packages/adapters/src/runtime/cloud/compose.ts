@@ -1,6 +1,6 @@
 import type { Oblien, WorkspaceHandle } from "oblien";
 
-import { DEFAULT_RESOURCE_CONFIG, type LogCallback, type ResourceConfig } from "../../types";
+import { DEFAULT_RESOURCE_CONFIG, cloudCpus, type LogCallback, type ResourceConfig } from "../../types";
 import type { WorkspaceRuntimePlan } from "../../dockerfile";
 import { sq, type BuildLogger } from "../build-pipeline";
 import { SYSTEM, safeErrorMessage } from "@repo/core";
@@ -365,7 +365,7 @@ export class CloudComposeSupport {
     config: MultiServiceDeployConfig,
     log: LogCallback,
   ): Promise<void> {
-    const cpus = config.resources?.cpuCores ?? DEFAULT_RESOURCE_CONFIG.cpuCores;
+    const cpus = cloudCpus(config.resources?.cpuCores ?? DEFAULT_RESOURCE_CONFIG.cpuCores);
     const memory_mb = config.resources?.memoryMb ?? DEFAULT_RESOURCE_CONFIG.memoryMb;
     try {
       await withCloudOperationTimeout(
@@ -449,7 +449,7 @@ export class CloudComposeSupport {
         image: config.image,
         mode: "permanent",
         config: {
-          cpus: resources.cpuCores,
+          cpus: cloudCpus(resources.cpuCores),
           memory_mb: resources.memoryMb,
           disk_size_mb: resources.diskMb,
           env: toEnvArray(config.environment),

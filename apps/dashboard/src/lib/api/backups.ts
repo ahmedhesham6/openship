@@ -184,6 +184,13 @@ export const backupDestinationsApi = {
     api.post<{ data: { ok: boolean; reason?: string } }>(
       endpoints.backupDestinations.preflight(id),
     ),
+  /** Test an unsaved destination. Pass `id` to reuse stored secrets for
+   *  fields left blank (edit mode). Nothing is persisted. */
+  preflightDraft: (body: CreateDestinationInput & { id?: string }) =>
+    api.post<{ data: { ok: boolean; reason?: string } }>(
+      endpoints.backupDestinations.preflightDraft,
+      body,
+    ),
 };
 
 export const backupsApi = {

@@ -1,5 +1,6 @@
 import { api } from "./client";
 import { endpoints } from "./endpoints";
+import type { AppManagement, AppSettingGroup } from "@repo/core";
 
 /** One catalog entry as returned by GET /apps/catalog. */
 export interface AppCatalogField {
@@ -21,12 +22,38 @@ export interface AppCatalogEntry {
   category: string;
   tags: string[];
   flowHref?: string;
+  /** How the installed app is managed (schema settings / custom href / none). */
+  management: AppManagement | null;
+  /** Not installable this version — render dimmed + block install. */
+  comingSoon?: boolean;
   configFields: AppCatalogField[];
 }
 
 export type InstallAppResult =
   | { kind: "flow"; flowHref: string }
   | { kind: "template"; projectId: string; slug: string };
+
+/** Effective value for one setting field (secrets are never sent back). */
+export interface AppSettingValue {
+  service: string;
+  key: string;
+  value: string;
+  secret: boolean;
+  set: boolean;
+}
+
+export interface AppSettingsView {
+  appTemplateId: string | null;
+  management: AppManagement | null;
+  groups: AppSettingGroup[];
+  values: AppSettingValue[];
+}
+
+export interface AppSettingChange {
+  service: string;
+  key: string;
+  value: string;
+}
 
 export const appsApi = {
   /** The installable app catalog. */
@@ -36,4 +63,16 @@ export const appsApi = {
    *  flow apps return the wizard route to hand off to. */
   install: (body: { templateId: string; name?: string; config?: Record<string, string> }) =>
     api.post<{ data: InstallAppResult }>(endpoints.apps.install, body),
+
+  /** An installed app's curated settings schema + current values. */
+  getSettings: (projectId: string | number) =>
+    api.get<{ data: AppSettingsView }>(endpoints.apps.settings(projectId)),
+
+  /** Update an installed app's curated settings (safe env merge). Returns whether
+   *  a full redeploy (vs a restart-apply) is needed for the changes to take effect. */
+  updateSettings: (projectId: string | number, changes: AppSettingChange[]) =>
+    api.patch<{ data: { count: number; requiresRedeploy: boolean } }>(
+      endpoints.apps.settings(projectId),
+      { changes },
+    ),
 };

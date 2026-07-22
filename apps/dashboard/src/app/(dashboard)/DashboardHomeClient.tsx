@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { projectsApi } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import HomeTipCard from "@/components/overview/HomeTipCard";
+import UpdatesBlock from "@/components/overview/UpdatesBlock";
 import HomeWelcome from "@/components/overview/HomeWelcome";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { getProjectStatus, PROJECT_STATUS_META, projectStatusLabel } from "@/utils/project-status";
@@ -263,7 +263,7 @@ export default function DashboardHomeClient({ initialData }: DashboardHomeClient
               </div>
             </div>
 
-            <HomeTipCard projectCount={projects.length} loading={loading} />
+            <UpdatesBlock projectCount={projects.length} loading={loading} />
 
             {/* Apps — compact, colorful. Install is the fancy + in the header; the
                 empty state is a small colorful vector, no big button. */}

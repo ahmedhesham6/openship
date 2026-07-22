@@ -60,7 +60,9 @@
     "bind": "مسار مضيف",
     "nVolumes": "{n} وحدة تخزين",
     "nEnv": "{n} متغيّر",
-    "alreadyManaged": "تم تخطي {count} حاوية يديرها Openship بالفعل."
+    "alreadyManaged": "تم تخطي {count} حاوية يديرها Openship بالفعل.",
+    "proxyExcluded": "وكيل عكسي ({ports}) — لم يُستورد؛ حافة Openship تحل محله.",
+    "edgePortReserved": "المنافذ {ports} محجوزة لحافة Openship؛ لا تُنشر."
   },
   "scanFailed": "فشل فحص Docker",
   "adoptFailed": "تعذّر إنشاء المشروع",

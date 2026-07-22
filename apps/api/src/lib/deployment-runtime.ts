@@ -29,6 +29,15 @@ export interface DeploymentMeta {
   runtimeMode?: RuntimeMode;
   serverId?: string;
   /**
+   * Adopt an already-running, externally-supervised process instead of building
+   * + starting one. Set for the self-deployed control plane (the "openship"
+   * self-app): the deployment is real (row + activeDeploymentId + routes/SSL via
+   * the normal pipeline) but the bare runtime never starts a unit. Inert for
+   * `resolveEffectiveTarget`; only the runtime's deploy step reads it (via the
+   * `adopt` flag threaded onto DeployConfig).
+   */
+  adopt?: boolean;
+  /**
    * Release/dist-source deploy: the semver version this deployment shipped
    * (no leading "v"). Captured in the snapshot by `applyReleaseSourceToSnapshot`
    * and promoted to the `deployment.release_version` column onSuccess — the

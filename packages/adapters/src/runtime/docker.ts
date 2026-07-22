@@ -180,6 +180,32 @@ function normalizeInspectPorts(data: Dockerode.ContainerInspectInfo): DockerPort
     }
   }
 
+  // NetworkSettings.Ports is only populated while the container RUNS; a stopped
+  // container reports its published ports in HostConfig.PortBindings instead.
+  // Read that as a fallback so a stopped service's port mapping isn't lost.
+  const hostBindings = (data.HostConfig?.PortBindings ?? {}) as Record<
+    string,
+    Array<{ HostIp?: string; HostPort?: string }> | null
+  >;
+  for (const [key, bindings] of Object.entries(hostBindings)) {
+    if (seen.has(key)) continue;
+    const parsed = parseKey(key);
+    if (!parsed) continue;
+    seen.add(key);
+    if (bindings && bindings.length > 0) {
+      for (const b of bindings) {
+        out.push({
+          privatePort: parsed.port,
+          ...(b.HostPort ? { publicPort: Number(b.HostPort) } : {}),
+          type: parsed.proto,
+          ...(b.HostIp ? { ip: b.HostIp } : {}),
+        });
+      }
+    } else {
+      out.push({ privatePort: parsed.port, type: parsed.proto });
+    }
+  }
+
   const exposed = (data.Config?.ExposedPorts ?? {}) as Record<string, object>;
   for (const key of Object.keys(exposed)) {
     if (seen.has(key)) continue;
@@ -1756,13 +1782,17 @@ export class DockerRuntime implements RuntimeAdapter {
    * followProgress hangs forever (this was the cross-server migration stall).
    * A local socket has no such issue, so it keeps the native dockerode pull.
    */
-  async pullImage(ref: string): Promise<void> {
-    try {
-      await this.docker.getImage(ref).inspect();
-      return; // already present
-    } catch {
-      /* missing → pull below */
+  async pullImage(ref: string, opts?: { force?: boolean }): Promise<void> {
+    if (!opts?.force) {
+      try {
+        await this.docker.getImage(ref).inspect();
+        return; // already present
+      } catch {
+        /* missing → pull below */
+      }
     }
+    // force → skip the present-check and always pull the tag, so a moved
+    // mutable tag (:latest/:1) rolls forward on an "update" deploy.
     const executor = this.connectionOptions?.executor;
     if (executor) {
       // 10 min ceiling — large images over a slow link; still bounded so a
@@ -2408,7 +2438,8 @@ export class DockerRuntime implements RuntimeAdapter {
         });
         // Shared pull path — blocking `docker pull` over SSH so a first-time
         // pull on a fresh remote server can't hang (followProgress-over-SSH).
-        await this.pullImage(config.image);
+        // force-pull on the "update" trigger to roll a moved mutable tag forward.
+        await this.pullImage(config.image, { force: config.forcePull });
       } catch (err) {
         log({
           timestamp: new Date().toISOString(),
@@ -2467,6 +2498,11 @@ export class DockerRuntime implements RuntimeAdapter {
     const data = await container.inspect();
     const { ip, hostPort } = extractNetworkInfo(data);
 
+    // Record the content-addressable digest actually running so the update
+    // scanner can later detect a moved mutable tag. Best-effort: a locally-built
+    // image has no RepoDigests, and any inspect failure must not fail the deploy.
+    const imageDigest = await this.resolveImageDigest(config.image).catch(() => undefined);
+
     log({
       timestamp: new Date().toISOString(),
       message: `Service ${config.serviceName} started (${container.id.slice(0, 12)})${ip ? ` at ${ip}` : ""}.\n`,
@@ -2478,7 +2514,27 @@ export class DockerRuntime implements RuntimeAdapter {
       status: "running",
       ip,
       hostPort,
+      imageDigest,
     };
+  }
+
+  /**
+   * Resolve the `repo@sha256:…` digest of a pulled image from its RepoDigests,
+   * preferring the entry whose repo matches `ref` (an image may carry digests
+   * for several repos). Returns undefined for a locally-built image (no
+   * RepoDigests) or any inspect error. Works local + SSH (plain inspect, no
+   * followProgress). Never throws.
+   */
+  private async resolveImageDigest(ref: string): Promise<string | undefined> {
+    const info = await this.docker.getImage(ref).inspect();
+    const repoDigests: string[] = (info as { RepoDigests?: string[] })?.RepoDigests ?? [];
+    if (repoDigests.length === 0) return undefined;
+    // repo = ref without tag/digest (a colon after the last slash is the tag).
+    const noDigest = ref.split("@")[0];
+    const lastColon = noDigest.lastIndexOf(":");
+    const lastSlash = noDigest.lastIndexOf("/");
+    const repo = lastColon > lastSlash ? noDigest.slice(0, lastColon) : noDigest;
+    return repoDigests.find((d) => d.startsWith(`${repo}@`)) ?? repoDigests[0];
   }
 
   async deployService(

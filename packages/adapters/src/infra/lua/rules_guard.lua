@@ -13,6 +13,12 @@
 local rules = ngx.shared.rules
 if not rules then return end
 
+-- Rate-limit counters live in their OWN dict so a high-cardinality flood (a new
+-- rl: key per source IP per second) can't LRU-evict the rulesets and silently
+-- disable enforcement. Fall back to `rules` on a box whose config predates the
+-- separate dict (still works, just shares the zone until the next reload).
+local counters = ngx.shared.rl_counters or rules
+
 local host = ngx.var.host
 if not host then return end
 
@@ -78,7 +84,15 @@ if ban then
     end
     if ban.countries then
         local cc = country_of()
-        if cc and ban.countries[cc] then return ngx.exit(deny_status) end
+        -- Fail CLOSED (matches the allow-list above): if geo is unavailable we
+        -- cannot prove the client is NOT from a banned country, so block rather
+        -- than silently letting banned traffic through. A blocked host is a loud
+        -- signal to fix geo; fail-open would be a silent security hole.
+        if not cc then
+            ngx.log(ngx.WARN, "rules_guard: country ban active but geo unavailable — blocking (fail-closed)")
+            return ngx.exit(deny_status)
+        end
+        if ban.countries[cc] then return ngx.exit(deny_status) end
     end
     if ban.emptyUA or ban.uas then
         local ua = ngx.var.http_user_agent
@@ -110,7 +124,7 @@ local rl = spec.rl
 if rl then
     local key = "rl:" .. host .. ":" .. (chosen.pathPrefix or "/") .. ":" .. ips
         .. ":" .. math.floor(ngx.now())
-    local c = rules:incr(key, 1, 0, 2)  -- init 0, 2s TTL → self-expiring buckets
+    local c = counters:incr(key, 1, 0, 2)  -- init 0, 2s TTL → self-expiring buckets
     if c and c > rl.limit then
         ngx.header["Retry-After"] = "1"
         return ngx.exit(rl.status)

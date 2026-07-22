@@ -35,7 +35,11 @@ export function displayDnsName(fullName: string, domain: string): string {
   return fullName;
 }
 
-/** Iteration order: host records first, mail-delivery records next. */
+/**
+ * Iteration order: host records first, mail-delivery records next, then any
+ * `extraRecords` (e.g. the SES send-hop DKIM CNAMEs + MAIL FROM added by the
+ * outbound relay) last.
+ */
 export function recordsToList(records: DnsRecords): DnsRecord[] {
   return [
     records.a,
@@ -44,6 +48,7 @@ export function recordsToList(records: DnsRecords): DnsRecord[] {
     records.spf,
     records.dkim,
     records.dmarc,
+    ...(records.extraRecords ?? []),
   ].filter((r): r is DnsRecord => r !== undefined);
 }
 

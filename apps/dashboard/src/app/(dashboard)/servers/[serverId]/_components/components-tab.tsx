@@ -6,6 +6,7 @@ import {
   Download,
   RotateCcw,
   ChevronDown,
+  ArrowUpCircle,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import type {
@@ -14,6 +15,16 @@ import type {
   SetupLogEvent,
 } from "@/lib/api/system";
 import { useI18n, interpolate } from "@/components/i18n-provider";
+
+/** Component name → i18n key for its human/business role. The technical name
+ *  (component.label, e.g. "OpenResty") stays as a small secondary tag. */
+const ROLE_KEY: Record<string, string> = {
+  docker: "roleDocker",
+  git: "roleGit",
+  openresty: "roleOpenresty",
+  certbot: "roleCertbot",
+  rsync: "roleRsync",
+};
 
 function HealthRow({
   component,
@@ -30,9 +41,20 @@ function HealthRow({
 }) {
   const { t } = useI18n();
   const canRunAction = component.installable;
+  // A newer package is available → the reinstall action upgrades to it, so lead
+  // with "Update" (the same install action, apt-get install pulls the candidate).
+  const isUpdate = Boolean(component.updateAvailable && component.installed);
   const actionLabel = component.healthy || component.installed ? t.servers.components.reinstall : t.servers.components.install;
   const canRemove = component.removable && component.installed;
   const removeDisabled = busy || component.removeSupported === false;
+
+  // Lead with the human role ("Reverse proxy") and keep the technical name
+  // ("OpenResty") as a small secondary tag. Falls back to the raw label for
+  // any component without a mapped role.
+  const techName = component.label || component.name;
+  const roleName =
+    (t.servers.components as Record<string, string>)[ROLE_KEY[component.name] ?? ""] ?? techName;
+  const showTech = roleName !== techName;
 
   return (
     <div className="flex items-center gap-3 py-2.5 px-3 rounded-lg hover:bg-muted/30 transition-colors">
@@ -46,11 +68,22 @@ function HealthRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className="text-sm font-medium text-foreground">
-            {component.label || component.name}
+            {roleName}
           </p>
+          {showTech && (
+            <span className="text-xs font-medium text-muted-foreground/70">
+              {techName}
+            </span>
+          )}
           {component.version && (
             <span className="text-xs text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded">
               v{component.version}
+            </span>
+          )}
+          {component.updateAvailable && component.availableVersion && (
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-warning bg-warning-bg px-1.5 py-0.5 rounded">
+              <ArrowUpCircle className="size-3" />
+              v{component.availableVersion}
             </span>
           )}
         </div>
@@ -73,16 +106,22 @@ function HealthRow({
             <button
               onClick={() => onRunAction(component)}
               disabled={busy}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border border-border/70 hover:bg-muted transition-colors text-muted-foreground disabled:opacity-50"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors disabled:opacity-50 ${
+                isUpdate
+                  ? "border-warning-border bg-warning-bg text-warning hover:bg-warning-bg"
+                  : "border-border/70 hover:bg-muted text-muted-foreground"
+              }`}
             >
               {running ? (
                 <Loader2 className="size-3.5 animate-spin" />
+              ) : isUpdate ? (
+                <ArrowUpCircle className="size-3.5" />
               ) : component.healthy || component.installed ? (
                 <RotateCcw className="size-3.5" />
               ) : (
                 <Download className="size-3.5" />
               )}
-              {running ? t.servers.components.running : actionLabel}
+              {running ? t.servers.components.running : isUpdate ? "Update" : actionLabel}
             </button>
           )}
           {canRemove && (

@@ -13,6 +13,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { internalAuth, localOnly, requireRole } from "../../middleware";
+import { rateLimiterFor } from "../../middleware/rate-limiter";
 import { secureRouter } from "../../lib/secure-router";
 import * as fs from "./filesystem.controller";
 import * as setup from "./setup.controller";
@@ -22,6 +23,7 @@ import * as serversCtrl from "./servers.controller";
 import * as rateLimit from "./rate-limit.controller";
 import * as tunnels from "./tunnels.controller";
 import * as serverGithub from "../github/server-github.controller";
+import * as serverModules from "./server-modules.controller";
 import * as migration from "./migration/migration.controller";
 import * as dataTransfer from "./data-transfer/data-transfer.controller";
 
@@ -41,6 +43,8 @@ r.public("post", "/onboarding/test-connection", { reason: "First-run SSH reachab
 r.public("post", "/setup", { reason: "Electron desktop client setup - protected by internalAuth shared token" }, internalAuth, setup.setup);
 r.public("get", "/setup", { reason: "Electron desktop client setup read - protected by internalAuth shared token" }, internalAuth, setup.getSetup);
 r.public("post", "/bootstrap-admin", { reason: "CLI first-admin creation — internal-token gated, one-shot before any admin exists (openship setup)" }, internalAuth, setup.bootstrapAdmin);
+r.public("post", "/reset-admin-password", { reason: "CLI password recovery — internal-token gated; resets the local admin login for a locked-out operator (openship reset-admin-password)" }, internalAuth, setup.resetAdminPassword);
+r.public("post", "/invite-signup", { reason: "Self-host invited signup — authorized by the unguessable invitation id (token) in the emailed link, NOT a session; creates the account for the invitation's own email. Public + rate-limited because the invitee isn't logged in yet." }, rateLimiterFor("auth-tight"), setup.inviteSignup);
 
 /* ── Control-plane self-registration (CLI setup wizard) ─────────────
  * After bootstrap-admin, the wizard registers Openship itself as an app
@@ -56,6 +60,20 @@ r.public("post", "/self-edge/preflight", { reason: "CLI setup — detect what ow
 r.get("/settings", { tag: "settings:read" }, setup.getSetup);
 r.patch("/settings", { tag: "settings:write" }, setup.updateSettings);
 r.delete("/settings", { tag: "settings:admin" }, setup.deleteSettings);
+
+// Instance SMTP (Settings → Email) — self-hosted operator transport for all
+// system mail (password reset, verification, invites, notifications).
+//
+// WRITE + TEST are owner-only via requireRole("owner"): the `settings:*` tag
+// alone also admits admins/members (see lib/permission.ts), and this row is
+// the transport for every password-reset/verification email — a member who
+// could repoint it to their own SMTP relay could harvest reset tokens and take
+// over the owner's account (same reasoning as the data-transfer routes below).
+// GET returns only a MASKED config (no password) so it stays settings:read —
+// that keeps the "no email transport → set up SMTP" hint readable everywhere.
+r.get("/settings/email", { tag: "settings:read" }, setup.getEmailSettings);
+r.put("/settings/email", { tag: "settings:write" }, requireRole("owner"), setup.updateEmailSettings);
+r.post("/settings/email/test", { tag: "settings:write" }, requireRole("owner"), setup.sendTestEmail);
 
 /* ── Zero-auth → local-auth upgrade (no session yet) ────────────── */
 r.public(
@@ -82,6 +100,12 @@ r.delete("/servers/:id", { tag: "server:admin" }, serversCtrl.deleteServer);
 /* ── Per-server rate limiting (OpenResty level) ─────────────────── */
 r.get("/servers/:id/rate-limit", { tag: "server:read" }, rateLimit.getRateLimit);
 r.patch("/servers/:id/rate-limit", { tag: "server:write" }, rateLimit.updateRateLimit);
+
+// ── Native-module versioning + migration (OpenResty, …). The `:id` server is
+//    the permission resource; handlers hard-guard cloud + org-scope. ──
+r.get("/servers/:id/modules", { tag: "server:read" }, serverModules.listServerModules);
+r.post("/servers/:id/modules/scan", { tag: "server:write" }, serverModules.scanServerModules);
+r.post("/servers/:id/modules/:module/apply", { tag: "server:write" }, serverModules.applyServerModuleUpdate);
 
 // ── Per-server GitHub auth (self-hosted): device-login token / PAT / SSH
 //    server-key / per-repo deploy-key. The `:id` server is the permission

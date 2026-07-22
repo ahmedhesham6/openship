@@ -55,7 +55,9 @@
     "online": "متصل",
     "offline": "غير متصل",
     "authKey": "مفتاح",
-    "authPassword": "كلمة مرور"
+    "authPassword": "كلمة مرور",
+    "projects": "المشاريع",
+    "regions": "المناطق"
   },
   "form": {
     "sshConnection": "اتصال SSH",

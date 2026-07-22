@@ -136,7 +136,9 @@
       "domainLabel": "Domaine",
       "free": "Gratuit",
       "custom": "Personnalisé",
-      "routingTrafficPrefix": "Routage du trafic vers le port"
+      "routingTrafficPrefix": "Routage du trafic vers le port",
+      "duplicateTitle": "Domaine en double",
+      "duplicateDescription": "Deux routes pointent vers le même domaine — modifiez-en une pour que chaque route ait le sien :"
     },
     "shared": {
       "title": "Environnement partagé",
@@ -300,7 +302,20 @@
     "detailFramework": "Framework",
     "detailBranch": "Branche",
     "detailDomains": "Domaines",
-    "detailDomain": "Domaine"
+    "detailDomain": "Domaine",
+    "portAdvisory": {
+      "title": "Est-ce le bon port ?",
+      "bannerTitle": "Un port pourrait être mal configuré",
+      "review": "Vérifier",
+      "note": "Le routage pointe vers ce port — s'il est incorrect, les requêtes échoueront avec une erreur 502.",
+      "body": "Aucune réponse sur le port {port}. Si votre application écoute sur un autre port, indiquez le bon ici.",
+      "bodyService": "Service « {service} » : aucune réponse sur le port {port}. S'il écoute sur un autre port, indiquez le bon ici.",
+      "newPortLabel": "Port correct",
+      "changePort": "Changer le port",
+      "skip": "Ignorer",
+      "applied": "Routage mis à jour vers le port {port}.",
+      "changeError": "Impossible de mettre à jour le port. Veuillez réessayer."
+    }
   },
   "composeDeployment": {
     "title": {

@@ -35,6 +35,7 @@ export type {
 
 // ─── Edge preflight + takeover ──────────────────────────────────────────────────
 export {
+  classifyProxy,
   EdgeConflictError,
   EdgeMigrateRequested,
   freeEdgeTargets,
@@ -56,6 +57,9 @@ export { FileStateStore } from "./state";
 
 // ─── Executor ────────────────────────────────────────────────────────────────
 export { LocalExecutor, SshExecutor, SystemSshExecutor, createExecutor } from "./executor";
+// Privilege elevation for non-root SSH users (component installs use it; the
+// broader remote-exec surface can adopt it as a follow-up — see #84).
+export { elevatedExecutor, elevateCommand } from "./elevated-executor";
 
 // ─── Checks ──────────────────────────────────────────────────────────────────
 export {

@@ -19,6 +19,18 @@ export interface InstanceSettings {
   defaultBuildMode?: "auto" | "server" | "local";
 }
 
+/** Instance SMTP config as returned by the API — password is never included. */
+export interface InstanceEmailSettings {
+  configured: boolean;
+  host: string | null;
+  port: number | null;
+  user: string | null;
+  from: string | null;
+  hasPassword: boolean;
+  /** True when ANY transport (instance SMTP / mail server / env) can deliver. */
+  deliverable: boolean;
+}
+
 export interface ServerInfo {
   id: string;
   name: string | null;
@@ -32,6 +44,42 @@ export interface ServerInfo {
   createdAt: string;
   /** ISO-3166-1 alpha-2 country for the host IP, or null (hostname/private/unknown). */
   country?: string | null;
+  /** Projects currently deployed to this server (active deployment → this host). */
+  projectCount?: number;
+}
+
+/** A native module's cached drift status on a server (server_module_status). */
+export interface ServerModuleStatus {
+  id: string;
+  serverId: string;
+  moduleName: string;
+  installedVersion: string | null;
+  migrationVersion: string | null;
+  availableVersion: string | null;
+  behind: boolean;
+  latestInProgress: boolean;
+  currentLabel: string | null;
+  latestLabel: string | null;
+  detail: {
+    pendingConsent?: { id: string; version: string; warning?: string }[];
+    autoPending?: string[];
+    catalogAvailable?: boolean;
+    note?: string;
+  } | null;
+  checkedAt: string;
+}
+
+/** Result of applying a module's pending migrations. */
+export interface ModuleApplyResult {
+  module: string;
+  fromVersion: string;
+  toVersion: string;
+  appliedSteps: string[];
+  pendingConsent: { id: string; version: string; warning?: string }[];
+  skipped: string[];
+  changed: boolean;
+  ok: boolean;
+  error?: string;
 }
 
 /** True when running inside the Electron desktop shell */
@@ -49,6 +97,10 @@ export interface ComponentStatus {
   removeBlockedReason?: string;
   installed: boolean;
   version?: string;
+  /** Newer version available from the package manager (candidate), if any. */
+  availableVersion?: string;
+  /** True when `availableVersion` is newer than the installed `version`. */
+  updateAvailable?: boolean;
   running?: boolean;
   healthy: boolean;
   message: string;
@@ -207,6 +259,25 @@ export const systemApi = {
   deleteServer: () =>
     api.delete<{ ok: boolean }>(endpoints.system.settings),
 
+  /** Get instance SMTP config (masked — never returns the password). */
+  getEmailSettings: () =>
+    api.get<InstanceEmailSettings>(endpoints.system.emailSettings),
+
+  /** Set (or clear) the instance SMTP config. Blank password keeps the stored
+   *  one; empty host clears/disables it. */
+  updateEmailSettings: (data: {
+    host: string;
+    port?: number;
+    user?: string;
+    password?: string;
+    from?: string;
+  }) =>
+    api.put<{ ok: boolean; configured: boolean }>(endpoints.system.emailSettings, data),
+
+  /** Send a test email through the saved instance SMTP. */
+  sendTestEmail: (to: string) =>
+    api.post<{ ok: boolean; error?: string }>(endpoints.system.emailSettingsTest, { to }),
+
   /** Test SSH connection with credentials (without saving) */
   testConnection: (data: {
     sshHost: string;
@@ -280,6 +351,23 @@ export const systemApi = {
   /** Delete a server */
   deleteServerEntry: (id: string) =>
     api.delete<{ ok: boolean }>(endpoints.system.server(id)),
+
+  // ── Native-module updates (per-server) ─────────────────────────────────────
+
+  /** Cached drift for a server's installed native modules. */
+  listServerModules: (serverId: string) =>
+    api.get<ServerModuleStatus[]>(endpoints.system.serverModules(serverId)),
+
+  /** Re-probe the server now and refresh the module drift cache. */
+  scanServerModules: (serverId: string) =>
+    api.post<{ ok: boolean; modules: unknown[] }>(endpoints.system.serverModulesScan(serverId), {}),
+
+  /** Apply a module's pending migrations (includes consent-tier — surface the
+   *  warning to the user first). */
+  applyServerModule: (serverId: string, moduleName: string) =>
+    api.post<ModuleApplyResult>(endpoints.system.serverModuleApply(serverId, moduleName), {}, {
+      timeout: 120_000,
+    }),
 
   // ── Rate Limiting (per-server) ─────────────────────────────────────────────
 

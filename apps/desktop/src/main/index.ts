@@ -324,9 +324,18 @@ function showLoading() {
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(LOADING_HTML)}`);
 }
 
+/**
+ * First-run onboarding is OPT-IN — disabled by default, so the desktop app goes
+ * straight to the dashboard (the instance is treated as already set up). Set
+ * `OPENSHIP_ENABLE_ONBOARDING=1` (or `true`) to bring the onboarding wizard back.
+ */
+const ONBOARDING_ENABLED =
+  process.env.OPENSHIP_ENABLE_ONBOARDING === "1" ||
+  process.env.OPENSHIP_ENABLE_ONBOARDING === "true";
+
 /** Decide the first real view once services are up: onboarding vs dashboard. */
 function routeInitialView() {
-  if (store.get("onboardingComplete")) {
+  if (!ONBOARDING_ENABLED || store.get("onboardingComplete")) {
     loadDashboard();
   } else {
     loadOnboarding();
@@ -343,9 +352,15 @@ function loadDashboard() {
   if (!mainWindow) return;
   // Always use the LIVE dashboard origin — the port is dynamic per launch, so
   // any persisted dashboardUrl is stale. onboardingComplete is the real state.
-  mainWindow.loadURL(getLocalDashboardUrl()).catch(() => {
-    store.set("onboardingComplete", false);
-    loadOnboarding();
+  mainWindow.loadURL(getLocalDashboardUrl()).catch((err) => {
+    // Fall back to onboarding on a dashboard-load failure only when onboarding
+    // is enabled; otherwise it's just a transient dashboard error to surface.
+    if (ONBOARDING_ENABLED) {
+      store.set("onboardingComplete", false);
+      loadOnboarding();
+    } else {
+      console.error("[openship] Dashboard failed to load:", err);
+    }
   });
 }
 

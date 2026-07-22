@@ -3,7 +3,8 @@
     "loading": "Chargement…",
     "countOne": "{count} projet",
     "countOther": "{count} projets",
-    "noTargetProjects": "Aucun projet déployé sur cette cible pour le moment."
+    "noTargetProjects": "Aucun projet déployé sur cette cible pour le moment.",
+    "noTargetDesc": "Déployez une application sur cette cible, ou créez un nouveau projet pour commencer."
   },
   "status": {
     "live": "En ligne",
@@ -33,7 +34,9 @@
     "sourceLocal": "Local",
     "services": "Services",
     "static": "Statique",
-    "standalone": "Autonome"
+    "standalone": "Autonome",
+    "appBadge": "Application",
+    "updateAvailable": "Update"
   },
   "hosting": {
     "cloud": "Cloud",
@@ -108,6 +111,7 @@
     "production": "Production",
     "lastDeploy": "Dernier déploiement",
     "tabs": {
+      "appSettings": "Paramètres",
       "overview": "Vue d'ensemble",
       "services": "Services",
       "domains": "Domaines",
@@ -158,7 +162,18 @@
     "deleteConfirmPrefix": "Supprimer définitivement",
     "deleteConfirmSuffix": " ?",
     "cancel": "Annuler",
-    "delete": "Supprimer"
+    "delete": "Supprimer",
+    "detailsTitle": "Détails",
+    "detailsDescription": "Ce que ce projet déploie et où",
+    "type": "Type",
+    "typeApp": "Application",
+    "typeProject": "Projet",
+    "target": "Cible",
+    "targetPending": "Choisie au déploiement",
+    "services": "Services",
+    "created": "Créé",
+    "managedImages": "Images de conteneur gérées",
+    "managedImagesText": "Cette application s'exécute à partir d'images préconstruites — il n'y a pas de dépôt à connecter. Déployez simplement."
   },
   "overview": {
     "platformCloud": "Openship Cloud",

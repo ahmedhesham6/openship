@@ -55,7 +55,9 @@
     "online": "在线",
     "offline": "离线",
     "authKey": "密钥",
-    "authPassword": "密码"
+    "authPassword": "密码",
+    "projects": "项目",
+    "regions": "区域"
   },
   "form": {
     "sshConnection": "SSH 连接",

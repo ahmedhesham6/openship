@@ -16,6 +16,7 @@ import { join, posix } from "node:path";
 
 import {
   DEFAULT_RESOURCE_CONFIG,
+  cloudCpus,
   type BuildConfig,
   type DeployConfig,
   type BuildResult,
@@ -346,7 +347,7 @@ export async function provisionCloudWorkspace(
       image: config.image,
       mode: config.mode,
       config: {
-        cpus: config.resources.cpuCores,
+        cpus: cloudCpus(config.resources.cpuCores),
         memory_mb: config.resources.memoryMb,
         disk_size_mb: config.resources.diskMb,
         env: toEnvArray(config.env ?? {}),
@@ -1382,7 +1383,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
         image: config.buildImage,
         mode: "temporary",
         config: {
-          cpus: config.resources.cpuCores,
+          cpus: cloudCpus(config.resources.cpuCores),
           memory_mb: config.resources.memoryMb,
           disk_size_mb: config.resources.diskMb,
           env: envArray,
@@ -1504,7 +1505,7 @@ export class CloudRuntime implements MultiServiceRuntimeAdapter {
     for (let attempt = 1; attempt <= 3 && !resized; attempt++) {
       try {
         await ws.resources.update({
-          cpus: prodResources.cpuCores,
+          cpus: cloudCpus(prodResources.cpuCores),
           memory_mb: prodResources.memoryMb,
           apply: true,
         });

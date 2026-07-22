@@ -4,7 +4,7 @@
  * transition / sweepStaleRuns).
  */
 
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import type { Database } from "../client";
 import { dockerMigrationRun } from "../schema";
 
@@ -80,6 +80,32 @@ export function createDockerMigrationRunRepo(db: Database) {
           ...(patch ?? {}),
         })
         .where(eq(dockerMigrationRun.id, id));
+    },
+
+    /** Every in-flight (non-terminal) run — for boot recovery, which restarts
+     *  the source containers before marking each rolled_back. */
+    async listInFlight(): Promise<DockerMigrationRun[]> {
+      return db.query.dockerMigrationRun.findMany({
+        where: and(
+          inArray(dockerMigrationRun.status, IN_FLIGHT_MIGRATION_STATUSES),
+          isNull(dockerMigrationRun.finishedAt),
+        ),
+      });
+    },
+
+    /** In-flight runs touching a server as source OR target — the concurrency
+     *  guard so two migrations can't race the same server destructively. */
+    async findActiveForServer(serverId: string): Promise<DockerMigrationRun[]> {
+      return db.query.dockerMigrationRun.findMany({
+        where: and(
+          inArray(dockerMigrationRun.status, IN_FLIGHT_MIGRATION_STATUSES),
+          isNull(dockerMigrationRun.finishedAt),
+          or(
+            eq(dockerMigrationRun.sourceServerId, serverId),
+            eq(dockerMigrationRun.targetServerId, serverId),
+          ),
+        ),
+      });
     },
 
     /** Mark every in-flight run as failed. Called at boot to reconcile a crash. */

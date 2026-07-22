@@ -1,27 +1,27 @@
 import { eq, and, isNull, desc, sql } from "drizzle-orm";
 import { generateId } from "@repo/core";
 import type { Database } from "../client";
-import { projectApp } from "../schema";
+import { projectGroup } from "../schema";
 import { member } from "../schema/organization";
 
-export type ProjectApp = typeof projectApp.$inferSelect;
-export type NewProjectApp = typeof projectApp.$inferInsert;
+export type ProjectGroup = typeof projectGroup.$inferSelect;
+export type NewProjectGroup = typeof projectGroup.$inferInsert;
 
-export function createProjectAppRepo(db: Database) {
+export function createProjectGroupRepo(db: Database) {
   return {
     async findById(id: string) {
-      return db.query.projectApp.findFirst({
-        where: and(eq(projectApp.id, id), isNull(projectApp.deletedAt)),
+      return db.query.projectGroup.findFirst({
+        where: and(eq(projectGroup.id, id), isNull(projectGroup.deletedAt)),
       });
     },
 
     /** Slug uniqueness scoped to one org. */
     async findBySlugInOrg(organizationId: string, slug: string) {
-      return db.query.projectApp.findFirst({
+      return db.query.projectGroup.findFirst({
         where: and(
-          eq(projectApp.organizationId, organizationId),
-          eq(projectApp.slug, slug),
-          isNull(projectApp.deletedAt),
+          eq(projectGroup.organizationId, organizationId),
+          eq(projectGroup.slug, slug),
+          isNull(projectGroup.deletedAt),
         ),
       });
     },
@@ -34,8 +34,8 @@ export function createProjectAppRepo(db: Database) {
      * the lookup (via assertResourceInOrg).
      */
     async findFirstBySlug(slug: string) {
-      return db.query.projectApp.findFirst({
-        where: and(eq(projectApp.slug, slug), isNull(projectApp.deletedAt)),
+      return db.query.projectGroup.findFirst({
+        where: and(eq(projectGroup.slug, slug), isNull(projectGroup.deletedAt)),
       });
     },
 
@@ -51,45 +51,45 @@ export function createProjectAppRepo(db: Database) {
       const perPage = opts?.perPage ?? 20;
       const offset = (page - 1) * perPage;
 
-      const rows = await db.query.projectApp.findMany({
+      const rows = await db.query.projectGroup.findMany({
         where: and(
-          eq(projectApp.organizationId, organizationId),
-          isNull(projectApp.deletedAt),
+          eq(projectGroup.organizationId, organizationId),
+          isNull(projectGroup.deletedAt),
         ),
-        orderBy: [desc(projectApp.createdAt)],
+        orderBy: [desc(projectGroup.createdAt)],
         limit: perPage,
         offset,
       });
 
       const [{ value: total }] = await db
         .select({ value: sql<number>`count(*)` })
-        .from(projectApp)
+        .from(projectGroup)
         .where(
-          and(eq(projectApp.organizationId, organizationId), isNull(projectApp.deletedAt)),
+          and(eq(projectGroup.organizationId, organizationId), isNull(projectGroup.deletedAt)),
         );
 
       return { rows, total: Number(total), page, perPage };
     },
 
-    async create(data: Omit<NewProjectApp, "id">) {
+    async create(data: Omit<NewProjectGroup, "id">) {
       const id = generateId("app");
       const row = { id, ...data };
-      await db.insert(projectApp).values(row);
-      return { ...row, createdAt: new Date(), updatedAt: new Date() } as ProjectApp;
+      await db.insert(projectGroup).values(row);
+      return { ...row, createdAt: new Date(), updatedAt: new Date() } as ProjectGroup;
     },
 
-    async update(id: string, data: Partial<NewProjectApp>) {
+    async update(id: string, data: Partial<NewProjectGroup>) {
       await db
-        .update(projectApp)
+        .update(projectGroup)
         .set({ ...data, updatedAt: new Date() })
-        .where(eq(projectApp.id, id));
+        .where(eq(projectGroup.id, id));
     },
 
     async softDelete(id: string) {
       await db
-        .update(projectApp)
+        .update(projectGroup)
         .set({ deletedAt: new Date(), updatedAt: new Date() })
-        .where(eq(projectApp.id, id));
+        .where(eq(projectGroup.id, id));
     },
   };
 }

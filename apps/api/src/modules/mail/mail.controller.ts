@@ -25,6 +25,7 @@
  */
 
 import type { Context } from "hono";
+import type { SSEStreamingApi } from "hono/streaming";
 import crypto from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { buildMailBackupPayload } from "./admin/backup-plan";
@@ -55,6 +56,7 @@ import {
 } from "./mail.service";
 import { checkMailHealth, MAIL_COMPONENTS } from "./mail-health.service";
 import { updatePostmasterPassword } from "./mail-credentials.service";
+import { reserveMailSetup } from "./mail-setup-lease";
 import {
   readState,
   writeState,
@@ -650,35 +652,32 @@ export async function startSetup(c: Context) {
     return c.json({ error: "Setup already running" }, 409);
   }
 
-  // Cross-replica lock: the mail_servers row IS the lock. INSERT with
-  // installedAt=null + atomic conflict detection — if another replica
-  // already started an install for this server within the last hour
-  // (row exists with installedAt=null AND createdAt is recent), we
-  // refuse. After 1h we assume the install crashed and let the next
-  // attempt take over.
-  const existing = await repos.mailServer.get(serverId).catch(() => null);
-  if (existing && !existing.installedAt) {
-    const ageMs = Date.now() - new Date(existing.createdAt).getTime();
-    if (ageMs < 60 * 60 * 1000) {
-      return c.json(
-        { error: "Setup already running on another replica or recently crashed" },
-        409,
-      );
-    }
-  }
+  // Reserve the process-local slot before the first database await so two
+  // requests cannot both pass the in-memory check in the same event-loop turn.
+  const session: ActiveSession = { serverId, domain, cancelled: false };
+  active = session;
 
-  active = { serverId, domain, cancelled: false };
-
+  let reservation;
   try {
-    await repos.mailServer.upsert({ serverId, domain, installedAt: null });
+    reservation = await reserveMailSetup(serverId, domain);
   } catch (err) {
-    console.warn(
-      "[mail] failed to record mail-server install start:",
+    if (active === session) active = null;
+    console.error(
+      "[mail] failed to reserve mail-server setup:",
       safeErrorMessage(err),
+    );
+    return c.json(
+      { error: "Could not reserve mail setup. Please try again." },
+      503,
     );
   }
 
-  return streamSSE(c, async (stream) => {
+  if (!reservation) {
+    if (active === session) active = null;
+    return c.json({ error: "Setup already running on another replica" }, 409);
+  }
+
+  const runSetup = async (stream: SSEStreamingApi) => {
     // Resolve initial state from the server. New install → fresh state.
     // Existing install on same domain → merge so secrets/completedSteps
     // survive across retries. Different domain on same server → wipe and
@@ -991,7 +990,25 @@ export async function startSetup(c: Context) {
         active = null;
       }
     }
-  });
+  };
+
+  const releaseSession = async () => {
+    if (active === session) active = null;
+    await reservation.release();
+  };
+
+  try {
+    return streamSSE(c, async (stream) => {
+      try {
+        await runSetup(stream);
+      } finally {
+        await releaseSession();
+      }
+    });
+  } catch (err) {
+    await releaseSession();
+    throw err;
+  }
 }
 
 /** POST /mail/setup/cancel - cancel the running setup */

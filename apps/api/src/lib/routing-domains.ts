@@ -1,6 +1,6 @@
 import { repos, type Domain, type Project, type Service } from "@repo/db";
 import type { RoutedDomainInput, SslProvider, SslResult } from "@repo/adapters";
-import { SYSTEM, resolveServiceHostnameLabel, normalizeCustomHostname } from "@repo/core";
+import { SYSTEM, ConflictError, resolveServiceHostnameLabel, normalizeCustomHostname } from "@repo/core";
 import { env } from "../config/env";
 import { serviceKind } from "./deployable-service";
 import { resolveServicePublicEndpoints } from "./public-endpoints";
@@ -340,6 +340,21 @@ export async function ensureRouteDomainRecord(opts: {
 }): Promise<Domain | null> {
   const { projectId, route, domainByHostname } = opts;
   const key = route.hostname.toLowerCase();
+
+  // Cross-project hijack guard. A hostname is globally unique and owned by ONE
+  // project. The service EDIT path already refuses a foreign hostname
+  // (ensurePendingServiceDomain), but the DEPLOY path minted/overwrote routes via
+  // findOrCreate's global lookup — which returned another project's row unchanged,
+  // letting project B overwrite project A's vhost (and serve A's domain on A's
+  // cert). Refuse loudly here, before any patch or create, so neither the update
+  // nor the create path can claim a hostname this project doesn't own.
+  const owner = await repos.domain.findByHostname(route.hostname);
+  if (owner && owner.projectId !== projectId) {
+    throw new ConflictError(
+      `Hostname ${route.hostname} is routed by another project and cannot be claimed here.`,
+    );
+  }
+
   const existing = domainByHostname.get(key);
   // Primary (DB isPrimary) is owned by explicit setPrimary — the deploy must not
   // re-derive it from endpoint order; only a new domain may claim it, when none exists.

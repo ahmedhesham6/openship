@@ -41,6 +41,15 @@ export const DEFAULT_BUILD_RESOURCE_CONFIG: ResourceConfig = {
   diskMb: 10240,
 };
 
+/** Normalize a tier's vCPU value for the Oblien workspace payload. Oblien
+ *  accepts fractional `cpus`, so the value passes through verbatim — we only
+ *  guard the resource-schema floor (0.25) so a 0/negative never reaches the API.
+ *  (Previously this ceil'd to a whole integer to work around an Oblien API that
+ *  rejected fractions, which over-allocated the 0.25/0.5 tiers to a full core.) */
+export function cloudCpus(cpuCores: number): number {
+  return Math.max(0.25, cpuCores);
+}
+
 // ─── Build / Deploy types ────────────────────────────────────────────────────
 
 export type ContainerStatus =
@@ -220,6 +229,16 @@ export interface DeployConfig {
    * O(full_size + small_delta × N). Docker/Cloud ignore the field.
    */
   previousDeploymentId?: string;
+  /**
+   * Adopt an ALREADY-RUNNING process instead of starting one. When true, a
+   * runtime that supports adoption (currently Bare) skips build promotion and
+   * the supervisor start entirely — it only health-probes `port` and returns a
+   * running result. Used to model an externally-supervised process (e.g. the
+   * Openship control plane launched by `openship up`) as a real deployment so
+   * the normal routing/SSL pipeline owns it, without a second process binding
+   * the port. No-op for runtimes that don't advertise adoption.
+   */
+  adopt?: boolean;
 }
 
 export interface BuildResult {

@@ -60,7 +60,9 @@ async function tryExec(executor: CommandExecutor, command: string): Promise<stri
   }
 }
 
-function classifyProxy(text: string | undefined): ProxyKind | undefined {
+/** Classify a proxy from an image/command/unit string. Exported so the Docker
+ *  migration scan can flag a containerized reverse proxy (traefik/nginx/…). */
+export function classifyProxy(text: string | undefined): ProxyKind | undefined {
   if (!text) return undefined;
   const t = text.toLowerCase();
   if (t.includes("openresty")) return "openresty";
@@ -128,7 +130,7 @@ async function probeEdgePort(
 
   return {
     port,
-    pid: listener?.pid,
+    pid: listener?.pid ?? undefined,
     command: docker
       ? `docker container ${docker.name} (${docker.image})`
       : listener?.command,

@@ -111,15 +111,38 @@ export async function execSshCommand(
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
+    let stream: ClientChannel | undefined;
+    let timedOut = false;
 
     const timer = setTimeout(() => {
+      timedOut = true;
+      if (stream) {
+        try {
+          stream.close();
+        } catch {
+          /* already closed */
+        }
+      }
       reject(new Error(`SSH command timed out after ${timeout}ms: ${command}`));
     }, timeout);
 
-    client.exec(command, (err, stream) => {
+    client.exec(command, (err, execStream) => {
       if (err) {
         clearTimeout(timer);
         reject(err);
+        return;
+      }
+
+      stream = execStream;
+
+      if (timedOut) {
+        // Timer already fired (exec itself was slow to hand back the
+        // channel) - tear this one down too instead of leaving it orphaned.
+        try {
+          stream.close();
+        } catch {
+          /* already closed */
+        }
         return;
       }
 

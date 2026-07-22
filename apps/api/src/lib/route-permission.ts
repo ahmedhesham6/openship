@@ -102,6 +102,7 @@ const ROOT_RESOURCES = new Set<string>([
   "terminal",
   "cloud",
   "notifications",
+  "updates",
 ]);
 
 /**
@@ -125,6 +126,7 @@ export const ORG_SINGLETON_RESOURCES = new Set<string>([
   "cloud",
   "terminal",
   "notifications",
+  "updates",
 ]);
 
 /**

@@ -40,6 +40,7 @@ import { platform } from "../../lib/controller-helpers";
 import { encrypt } from "../../lib/encryption";
 import { getLatestCommit, getRepository } from "../github/github.service";
 import { assertGitHubRepoAccess } from "../github/github-access";
+import { firePreDeployBackups } from "../backups/triggers/pre-deploy";
 import { resolveSmartRoute } from "./smart-route";
 import { resolveProjectInfo } from "./prepare.service";
 import { getFolderSession } from "../projects/folder/session-store";
@@ -65,7 +66,7 @@ import {
   syncProjectRouteState,
 } from "../domains/project-route.service";
 import { kickoffBuild, resolveServicePipelineMode } from "./build-pipeline";
-import { resolveReleaseDist, resolveLatestVersion, readApiVersion } from "../../lib/release-dist";
+import { resolveReleaseDist, resolveLatestVersion, readApiVersion } from "../../lib/release-resolver";
 
 function throwPreflightFailure(preflight: PreflightResult): never {
   const failedChecks = preflight.checks.filter((check) => check.status === "fail");
@@ -180,6 +181,12 @@ export interface DeploymentConfigSnapshot {
   serverId?: string;
   /** Runtime mode: "bare" (direct process) or "docker" (container-based) */
   runtimeMode?: "bare" | "docker";
+  /**
+   * Adopt an already-running process instead of building + starting one. Set
+   * for the self-deployed control plane so it becomes a real deployment without
+   * a second process binding the port. Threaded onto DeployConfig.adopt.
+   */
+  adopt?: boolean;
   /** Project services fan-out mode captured for this deployment. */
   serviceDeploymentMode?: "services" | "single";
   /**
@@ -1109,7 +1116,7 @@ export async function cancelBuildSession(deploymentId: string) {
 export async function redeployBuildSession(
   ctx: RequestContext,
   deploymentId: string,
-  opts?: { useExistingCommit?: boolean },
+  opts?: { useExistingCommit?: boolean; trigger?: string; preDeployBackup?: boolean },
 ) {
   const { dep: oldDep, project } = await loadDeployment(deploymentId);
   // GitHub access gate (default-deny): a member can redeploy a
@@ -1197,13 +1204,24 @@ export async function redeployBuildSession(
     branch,
   );
 
+  // "update" wants a snapshot of the OLD state before the (destructive) tag
+  // roll-forward — the safety net for stateful apps (n8n/Ghost/Convex volumes).
+  // Redeploy deliberately doesn't (rollback preserves the prior artifact), so
+  // this is gated on the caller opting in.
+  if (opts?.preDeployBackup) {
+    await firePreDeployBackups({
+      projectId: project.id,
+      organizationId: project.organizationId,
+    }).catch(() => {});
+  }
+
   const dep = await createQueuedDeployment({
     projectId: project.id,
     organizationId: project.organizationId,
     branch,
     commitSha,
     commitMessage,
-    trigger: "redeploy",
+    trigger: opts?.trigger ?? "redeploy",
     environment: oldDep.environment,
     framework: oldDep.framework || refreshedMeta.framework,
     meta: metaWithPrevious(refreshedMeta, project),
@@ -1339,6 +1357,14 @@ export async function triggerDeployment(
   const project = await repos.project.findById(data.projectId);
   if (!project) {
     throw new NotFoundError("Project", data.projectId);
+  }
+  // The Openship control plane IS the running host service, not a redeployable
+  // workload — it updates itself via the CLI. It's a release-provider project, so
+  // the git/localPath 403 below would NOT catch it; guard it explicitly.
+  if (project.appTemplateId === "openship") {
+    throw new ForbiddenError(
+      "The Openship control plane updates itself — run the CLI upgrade, not a redeploy.",
+    );
   }
   // Org-membership verified at the route boundary. No userId equality
   // check here — that would block team members.

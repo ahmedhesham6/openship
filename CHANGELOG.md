@@ -3,6 +3,65 @@
 All notable changes to Openship. Versions follow [semver](https://semver.org);
 the in-app updater surfaces critical advisories from `release-advisories.json`.
 
+## 0.2.2
+
+Apps and Jobs grow up, a self-hosted server can now talk to GitHub on its own,
+Backups get a real home, and a batch of delete/login/database reliability fixes.
+
+### Apps
+- **Day-2 app settings** — installed apps now expose a curated settings surface
+  (schema-driven) so you can change an app's real config after install without
+  digging through raw env. Edits go through a safe env-merge and tell you whether
+  a full redeploy (vs a quick restart-apply) is needed.
+- **Clean per-app install wizard** — clicking a catalog app opens a focused,
+  business-only setup that creates the project on confirm; the technical deploy
+  wizard is now the "Advanced" path (no more orphaned draft projects from a
+  half-finished install).
+- **Openship Mail is a first-class app** — it appears in the catalog alongside
+  Convex and n8n and hands off to the mail wizard. The rest of the catalog shows
+  as **Coming soon** (dimmed, not installable) for this release.
+
+### Jobs
+- **Automated backups show up in Jobs** (read-only) — backup schedules run on the
+  same job runner as everything else (zero duplication), so their next/last run
+  sits right next to your system and custom jobs.
+
+### Servers · GitHub
+- **Connect GitHub on a server** — each self-hosted server now authenticates to
+  GitHub on its own, from a dedicated **GitHub** tab: sign in with a device code
+  (like `gh`), paste a token, generate an SSH key to add to your account, or use
+  auto-registered read-only per-repo **deploy keys**. Credentials are stored
+  encrypted and the exact same connect panel is reused inside the deploy flow, so
+  a missing credential is one click to fix mid-deploy. Private-repo clones now
+  work without your desktop online.
+
+### Backups
+- **Redesigned Backups** — per-destination storage stats, a sticky status rail,
+  and clickable rows that open a per-destination detail page showing exactly which
+  projects and services back up there.
+
+### Cloud
+- **Per-user project cap** — Openship Cloud enforces a hard cap on projects per
+  user (env `CLOUD_MAX_PROJECTS_PER_USER`, default 2), at both create and
+  folder-upload/ensure. Self-hosted is unmetered.
+
+### Reliability & polish
+- **Deletes never get stuck** — project deletion shows a real **Deleting** state,
+  and when the source teardown can't complete you get a clean **"Delete from
+  storage"** option that drops the record immediately (leftover resources are
+  reclaimed later by GC). The atomic, all-or-nothing delete stays the default.
+- **Desktop sign-in fix** — the login redirect now lands on the same loopback host
+  the session cookie was minted on (`localhost` ⇄ `127.0.0.1`), so the dashboard
+  no longer opens cookieless and bounces you back to `/login`.
+- **Embedded database start-up** — no more false "locked by a different machine"
+  on your own box when the machine-id probe is momentarily flaky; the cross-machine
+  guard now only fires on a genuinely different, stable machine id.
+- **Calmer, consistent theming** — status colors (success / warning / danger /
+  info) are unified semantic tokens across the whole dashboard, and the dim
+  theme's greens and reds are tuned for comfortable contrast.
+- Servers empty state refreshed — clearer illustration, a **See docs** action, and
+  a distinct icon per "what gets configured" tile.
+
 ## 0.2.0
 
 A large feature + hardening release across the deploy flow, the app catalog,

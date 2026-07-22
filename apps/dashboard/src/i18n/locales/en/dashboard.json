@@ -112,7 +112,8 @@
       "install": "Install",
       "cancel": "Cancel",
       "nameLabel": "Name",
-      "configTitle": "Configure {app}"
+      "configTitle": "Configure {app}",
+      "comingSoon": "Coming soon"
     },
     "projects": {
       "title": "Projects",

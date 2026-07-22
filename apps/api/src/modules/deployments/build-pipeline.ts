@@ -23,6 +23,8 @@ import {
   runDeployPipeline,
   isMultiServiceRuntime,
   waitForReady,
+  EdgeMigrateRequested,
+  runEdgeTakeover,
 } from "@repo/adapters";
 import { platform } from "../../lib/controller-helpers";
 import { webhookProxyTarget } from "../../config";
@@ -537,25 +539,41 @@ async function executeBuildAndDeploy(project: Project, dep: Deployment, buildSes
     const cloneOnServer = clonePlan.runsOnServer;
     const allowRelayFallback = clonePlan.relayEligible;
 
-    const gitCred = await resolveBuildGitToken({
-      ctx: buildBackgroundContext({
-        userId: actorUserId,
-        organizationId: dep.organizationId,
-        label: "build:resolve-git-token",
-      }),
-      projectId: project.id,
-      owner: project.gitOwner ?? undefined,
-      repo: project.gitRepo ?? undefined,
-      buildStrategy: clonePlan.cloneBuildStrategy,
-      // Only meaningful for an on-server clone — lets a per-server GitHub auth
-      // config (device token / PAT / SSH key) win for that server.
-      serverId: clonePlan.runsOnServer ? resolved.serverId : null,
-      allowRelayFallback,
-      // Docker clone-on-server can degrade to an api-host clone, so resolve
-      // gracefully (a LOCAL fallback credential, flagged apiHostFallback) instead
-      // of hard-failing at token resolution after the server is provisioned.
-      allowApiHostFallback: clonePlan.dockerClonesOnServer,
-    });
+    // Only resolve a git clone token when the deploy actually needs a SOURCE.
+    // A services deploy where every enabled service runs a registry IMAGE (no
+    // build / dockerfile / monorepo) clones nothing — so demanding a remote
+    // GitHub token there is wrong and hard-fails "No GitHub token available".
+    // This is the SAME exemption preflight applies (checkConfig.needsProjectSource),
+    // so the two can't disagree. One-click app installs (Convex, n8n, …) are
+    // exactly this case: image services, hasBuild=false. This is what makes the
+    // app-install and advanced-deploy paths converge on one behavior.
+    const enabledSvcs = (snapshot.composeServices ?? []).filter((s) => s.enabled !== false);
+    const needsGitSource =
+      enabledSvcs.length > 0
+        ? enabledSvcs.some((s) => s.kind === "monorepo" || !!s.build || !!s.dockerfile)
+        : snapshot.hasBuild !== false;
+
+    const gitCred: Awaited<ReturnType<typeof resolveBuildGitToken>> = needsGitSource
+      ? await resolveBuildGitToken({
+          ctx: buildBackgroundContext({
+            userId: actorUserId,
+            organizationId: dep.organizationId,
+            label: "build:resolve-git-token",
+          }),
+          projectId: project.id,
+          owner: project.gitOwner ?? undefined,
+          repo: project.gitRepo ?? undefined,
+          buildStrategy: clonePlan.cloneBuildStrategy,
+          // Only meaningful for an on-server clone — lets a per-server GitHub auth
+          // config (device token / PAT / SSH key) win for that server.
+          serverId: clonePlan.runsOnServer ? resolved.serverId : null,
+          allowRelayFallback,
+          // Docker clone-on-server can degrade to an api-host clone, so resolve
+          // gracefully (a LOCAL fallback credential, flagged apiHostFallback) instead
+          // of hard-failing at token resolution after the server is provisioned.
+          allowApiHostFallback: clonePlan.dockerClonesOnServer,
+        })
+      : {};
 
     // Clone-on-server needs a SHIPPABLE credential that can travel to the build
     // host: the desktop relay (gitCred.relay) or an App/PAT token (gitCred.token
@@ -949,7 +967,33 @@ function buildDeployEnvironment(
               await system.ensureFeature("deploy", systemLog);
             }
             if (plannedDomains.length > 0) {
-              await system.ensureFeature("routing", systemLog);
+              // Routing needs OpenResty on 80/443. If a foreign proxy already
+              // holds them, HOLD the deploy and prompt (migrate / take over /
+              // cancel) — the same session prompt flow used for port conflicts —
+              // instead of hard-failing with EDGE_CONFLICT.
+              try {
+                await system.ensureFeature("routing", systemLog, { promptUser });
+              } catch (err) {
+                if (err instanceof EdgeMigrateRequested) {
+                  systemLog({
+                    message: `Migrating ${err.sites.length} site(s) from the existing proxy, then taking over 80/443...`,
+                    level: "warn",
+                  });
+                  const takeover = await runEdgeTakeover(
+                    targetExecutor,
+                    { status: err.status, sites: err.sites },
+                    systemLog,
+                  );
+                  for (const w of [...err.warnings, ...takeover.warnings]) {
+                    systemLog({ message: w, level: "warn" });
+                  }
+                  if (!takeover.ok) {
+                    throw new Error("Edge migration failed — rolled back to the previous proxy.");
+                  }
+                } else {
+                  throw err;
+                }
+              }
             }
             if (plannedDomains.some((d) => d.provisionSsl)) {
               await system.ensureFeature("ssl", systemLog);

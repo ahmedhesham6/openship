@@ -53,9 +53,13 @@ async function fetchUserOrgs(): Promise<OrgListItem[]> {
 async function resolveOrgChooserGate(
   activeOrganizationId: string | null | undefined,
 ): Promise<{ redirectTo?: string }> {
-  if (activeOrganizationId) return {};
-
   const orgs = await fetchUserOrgs();
+  // Trust the session's active org ONLY if it's an actual membership. A
+  // stale/foreign active org — e.g. the zero-auth Local User's workspace
+  // carried into a cloud user's session after cloud-connect — would otherwise
+  // scope the whole UI (Team members, cloud status, everything) to an org the
+  // user isn't in. Reconcile to a real membership instead.
+  if (activeOrganizationId && orgs.some((o) => o.id === activeOrganizationId)) return {};
   if (orgs.length >= 2) {
     return { redirectTo: "/select-organization" };
   }

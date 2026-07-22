@@ -12,8 +12,10 @@ import {
   X,
   ChevronDown,
   GitBranch,
+  Tag,
   Loader2,
   FilePlus2,
+  Trash2,
 } from "lucide-react";
 
 import { DomainSettings } from "../components/DomainSettings";
@@ -23,8 +25,9 @@ import { LogsSettings } from "../components/LogsSettings";
 import { BackupSettings } from "../components/BackupSettings";
 import { Deployments } from "../components/Deployments";
 import { AdvancedSettings } from "../components/AdvancedSettings";
-import { RouteRules } from "../components/RouteRules";
 import { OverviewTab } from "../components/OverviewTab";
+import { AppConfiguration } from "../components/AppConfiguration";
+import { isSchemaAppTemplate } from "@/components/app-settings/AppSettingsForm";
 import { ServicesTab } from "../components/ServicesTab";
 import { ProjectSidebar, ProjectMobileTabs } from "../components/ProjectSidebar";
 import { DraftProjectView } from "../components/DraftProjectView";
@@ -34,6 +37,7 @@ import { useProjectInfo } from "@/hooks/useProjectEndpoints";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/context/ToastContext";
+import { useModal } from "@/context/ModalContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
 import { ApiError, getApiErrorMessage, projectsApi } from "@/lib/api";
 import ErrorState from "@/components/shared/ErrorState";
@@ -78,6 +82,8 @@ const EnvironmentSwitcher = () => {
             slug: projectData.environmentSlug || "production",
             type: projectData.environmentType || "production",
             gitBranch: projectData.gitBranch || "main",
+            isApp: !!projectData.isApp,
+            version: null,
           },
       ];
 
@@ -287,10 +293,19 @@ const EnvironmentSwitcher = () => {
         aria-label={t.projects.env.switchAria}
       >
         <span className="truncate">{currentEnvironment.name}</span>
-        <span className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-          <GitBranch className="size-3" />
-          <span className="truncate">{currentEnvironment.gitBranch}</span>
-        </span>
+        {currentEnvironment.isApp ? (
+          currentEnvironment.version ? (
+            <span className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+              <Tag className="size-3" />
+              <span className="truncate">{currentEnvironment.version}</span>
+            </span>
+          ) : null
+        ) : (
+          <span className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+            <GitBranch className="size-3" />
+            <span className="truncate">{currentEnvironment.gitBranch}</span>
+          </span>
+        )}
         <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
       </button>
       <button
@@ -320,10 +335,19 @@ const EnvironmentSwitcher = () => {
                 >
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-foreground">{env.name}</span>
-                    <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                      <GitBranch className="size-3" />
-                      <span className="truncate">{env.gitBranch}</span>
-                    </span>
+                    {env.isApp ? (
+                      env.version ? (
+                        <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                          <Tag className="size-3" />
+                          <span className="truncate">{env.version}</span>
+                        </span>
+                      ) : null
+                    ) : (
+                      <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                        <GitBranch className="size-3" />
+                        <span className="truncate">{env.gitBranch}</span>
+                      </span>
+                    )}
                   </span>
                   {active && <Check className="size-4 shrink-0 text-primary" />}
                 </button>
@@ -461,7 +485,29 @@ const ProjectSettingsContent = () => {
 
   const { t } = useI18n();
   const { showToast } = useToast();
+  const { showModal, hideModal } = useModal();
   const router = useRouter();
+
+  // Keep the delete state honest: while this project reads as "deleting"
+  // (server flag or optimistic), poll for completion so a finished teardown
+  // (row gone) navigates away instead of leaving a stale "Deleting" page open.
+  // Read-only — never overwrites the in-flight optimistic state.
+  const isDeleting = getProjectStatus(projectData) === "deleting";
+  useEffect(() => {
+    if (!id || !isDeleting) return;
+    const iv = setInterval(async () => {
+      try {
+        await projectsApi.getInfo(id);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          clearInterval(iv);
+          showToast(t.projects.delete.alreadyDeleted, "success");
+          router.push("/");
+        }
+      }
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [id, isDeleting, router, showToast, t.projects.delete.alreadyDeleted]);
 
   const handleDeleteProject = async (
     deleteApp = true,
@@ -571,11 +617,55 @@ const ProjectSettingsContent = () => {
         // the leaked resources later.
         const reasons = (body.unrecoverable ?? []).map((u) => u.step).join(", ");
         console.error("[delete-project] teardown failed", body.unrecoverable);
-        if (
-          body.canForceOrphan &&
-          window.confirm(t.projects.delete.confirmForceOrphan)
-        ) {
-          void handleDeleteProject(deleteApp, wipeVolumes, force, true);
+        // The source teardown couldn't complete. Rather than a jarring
+        // window.confirm (or silently reverting to a plain "Draft"), surface a
+        // themed module offering the storage-only delete (forceOrphan) — atomic
+        // delete stays the default; this is the explicit bypass.
+        if (body.canForceOrphan) {
+          let modalId = "";
+          modalId = showModal({
+            maxWidth: "480px",
+            customContent: (
+              <div className="p-6 space-y-5">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-danger-bg text-danger">
+                    <Trash2 className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold text-foreground">
+                      {t.projects.delete.forceModalTitle}
+                    </h3>
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                      {t.projects.delete.forceModalBody}
+                    </p>
+                    {reasons && (
+                      <p className="mt-2 text-xs text-muted-foreground/70">{reasons}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => hideModal(modalId)}
+                    className="inline-flex h-9 items-center rounded-xl px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+                  >
+                    {t.projects.delete.forceModalCancel}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      hideModal(modalId);
+                      void handleDeleteProject(deleteApp, wipeVolumes, force, true);
+                    }}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-danger-solid px-4 text-sm font-medium text-white transition-colors hover:bg-danger-solid/90"
+                  >
+                    <Trash2 className="size-3.5" />
+                    {t.projects.delete.forceModalConfirm}
+                  </button>
+                </div>
+              </div>
+            ),
+          });
           return;
         }
         showToast(
@@ -661,7 +751,13 @@ const ProjectSettingsContent = () => {
         return <GitSettings />;
       case "runtime":
       case "settings":
-        return <BuildSettings />;
+        // Apps get the 2-mode Configuration surface (App settings | Deployment);
+        // regular projects get the raw build/runtime config.
+        return projectData.isApp && isSchemaAppTemplate(projectData.appTemplateId) ? (
+          <AppConfiguration />
+        ) : (
+          <BuildSettings />
+        );
       case "logs":
         return <LogsSettings />;
       case "backup":
@@ -669,7 +765,6 @@ const ProjectSettingsContent = () => {
       case "advanced":
         return (
           <div className="space-y-5">
-            <RouteRules />
             <AdvancedSettings onDeleteProject={handleDeleteProject} />
           </div>
         );

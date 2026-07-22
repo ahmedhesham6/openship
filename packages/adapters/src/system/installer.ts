@@ -10,6 +10,7 @@ import type { CommandExecutor, LogEntry } from "../types";
 import type { InstallerConfig, InstallResult, SystemLogCallback, SystemLog } from "./types";
 import { systemCatalog } from "./catalog";
 import { resolveEnvironment, type EnvironmentProfile } from "./environment";
+import { elevatedExecutor } from "./elevated-executor";
 import { safeErrorMessage } from "@repo/core";
 import {
   deployLuaScripts,
@@ -27,6 +28,7 @@ import {
   probeEdge,
   stopTargetsForStatus,
 } from "./edge-preflight";
+import { probeListeningPort } from "../runtime/port-conflict";
 import { canImportProxy, scanImportableSites } from "./proxy-import";
 import type { ProxyScanResult } from "./types";
 
@@ -65,6 +67,35 @@ async function ensureAptReady(
   await executor.streamExec("dpkg --configure -a 2>&1", onLog as (log: LogEntry) => void);
 }
 
+type ExecutorPrep =
+  | { ok: true; executor: CommandExecutor; profile: EnvironmentProfile }
+  | { ok: false; result: InstallResult };
+
+/**
+ * Resolve the environment and pick the executor to run privileged install/remove
+ * commands through. Root → the executor as-is. Non-root with passwordless sudo →
+ * an {@link elevatedExecutor} that prefixes every command with `sudo -n`. Neither
+ * → fail fast with an actionable message (component installs run apt/systemctl/
+ * writes under /etc, which need root — running them unelevated is the #84 apt-lock
+ * failure). Call this BEFORE touching the box (e.g. before stopping OpenResty).
+ */
+async function prepareExecutor(
+  executor: CommandExecutor,
+  component: string,
+): Promise<ExecutorPrep> {
+  const profile = await resolveEnvironment(executor);
+  if (profile.isRoot) return { ok: true, executor, profile };
+  if (profile.canSudo) return { ok: true, executor: elevatedExecutor(executor), profile };
+  return {
+    ok: false,
+    result: {
+      component,
+      success: false,
+      error: `Installing ${component} needs root. Connect this server as root, or as a user with passwordless sudo.`,
+    },
+  };
+}
+
 /** Build the package-manager remove command. */
 function buildRemoveCommand(pm: EnvironmentProfile["packageManager"], packages: string[]): string | null {
   const names = packages.join(" ");
@@ -84,7 +115,10 @@ export async function installDocker(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "docker");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   const plan = systemCatalog.installs.docker(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
     return { component: "docker", success: false, error: plan.unsupportedReason ?? "Docker install not supported" };
@@ -118,7 +152,10 @@ export async function installGit(
   onLog: SystemLogCallback,
   opts?: { label?: string },
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "git");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   const plan = systemCatalog.installs.git(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
     return { component: "git", success: false, error: plan.unsupportedReason ?? "Git install not supported" };
@@ -146,7 +183,10 @@ export async function installRsync(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "rsync");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   const plan = systemCatalog.installs.rsync(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
     return { component: "rsync", success: false, error: plan.unsupportedReason ?? "rsync install not supported" };
@@ -174,7 +214,10 @@ export async function installCertbot(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "certbot");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   const plan = systemCatalog.installs.certbot(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
     return { component: "certbot", success: false, error: plan.unsupportedReason ?? "Certbot install not supported" };
@@ -287,7 +330,12 @@ export async function installOpenResty(
   onLog: SystemLogCallback,
   config?: InstallerConfig,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  // Gate on privilege BEFORE touching the box, so a non-privileged run bails
+  // out cleanly instead of stopping a running OpenResty and then failing at apt.
+  const prep = await prepareExecutor(executor, "openresty");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
   onLog(log(describeEnvironment(profile)));
   const plan = systemCatalog.installs.openresty(profile);
   if (!plan.supported || !plan.installCommand || !plan.verifyCommand) {
@@ -386,8 +434,10 @@ export async function uninstallRsync(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
-  const cmd = buildRemoveCommand(profile.packageManager, ["rsync"]);
+  const prep = await prepareExecutor(executor, "rsync");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const cmd = buildRemoveCommand(prep.profile.packageManager, ["rsync"]);
   if (!cmd) return { component: "rsync", success: false, error: "rsync removal not supported" };
 
   onLog(log("Removing rsync..."));
@@ -406,8 +456,10 @@ export async function uninstallCertbot(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
-  const cmd = buildRemoveCommand(profile.packageManager, ["certbot"]);
+  const prep = await prepareExecutor(executor, "certbot");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const cmd = buildRemoveCommand(prep.profile.packageManager, ["certbot"]);
   if (!cmd) return { component: "certbot", success: false, error: "Certbot removal not supported" };
 
   onLog(log("Removing certbot..."));
@@ -426,7 +478,10 @@ export async function uninstallOpenResty(
   executor: CommandExecutor,
   onLog: SystemLogCallback,
 ): Promise<InstallResult> {
-  const profile = await resolveEnvironment(executor);
+  const prep = await prepareExecutor(executor, "openresty");
+  if (!prep.ok) return prep.result;
+  executor = prep.executor;
+  const profile = prep.profile;
 
   try {
     // 1. Stop
@@ -434,11 +489,18 @@ export async function uninstallOpenResty(
     await execSafe(executor, "systemctl stop openresty 2>/dev/null || true");
     await execSafe(executor, "pkill -f '[o]penresty' 2>/dev/null || true");
     // Force-clear port 80 only if it's not held by a foreign proxy — we never
-    // take down someone else's service while removing our own.
+    // take down someone else's service while removing our own. And free it by
+    // killing only what still LISTENS on :80 (a lingering openresty worker),
+    // never a blind `fuser -k 80/tcp` — fuser matches ANY socket on the port,
+    // so a process merely holding an outbound/established :80 connection would
+    // be killed too. probeListeningPort is LISTEN-state filtered.
     const edge = await probeEdge(executor).catch(() => null);
     const foreignOn80 = edge?.occupants.some((o) => o.port === 80) ?? false;
     if (!foreignOn80) {
-      await execSafe(executor, "fuser -k 80/tcp 2>/dev/null || true");
+      const stray = await probeListeningPort(executor, 80).catch(() => null);
+      if (stray?.pid) {
+        await execSafe(executor, `kill -9 ${stray.pid} 2>/dev/null || true`);
+      }
     }
 
     // 2. Remove package

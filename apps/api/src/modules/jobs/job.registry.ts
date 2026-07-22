@@ -22,6 +22,8 @@ import { runRetentionSweep } from "../backups/retention-prune";
 import { pruneAuditEvents } from "../audit/audit-prune";
 import { runReconcileSweep } from "../deployments/reconcile-schedule";
 import { verifyPendingDomains } from "../domains/domain.service";
+import { scanInstanceUpdates } from "../updates/updates.service";
+import { scanInstanceModules } from "../system/server-modules.service";
 import { runDueOnceJobs } from "./job-command";
 import type { JobSummary } from "../../lib/system-jobs";
 
@@ -101,6 +103,34 @@ export const SYSTEM_JOB_DEFS: SystemJobDef[] = [
     run: async () => {
       const r = await verifyPendingDomains();
       return { verified: r.verified, failed: r.failed, pending: r.stillPending, total: r.total };
+    },
+  },
+  {
+    key: "updates:scan",
+    label: "Update scan",
+    // The one channel for "is anything out of date?" — refreshes the
+    // update_status cache for every app/project/self-app/webmail so the home
+    // Updates block + Apps tab read a table instead of hitting registries/GitHub
+    // per page load. Off-peak, off the :00/:30 marks; not on desktop.
+    defaultCron: "19 */6 * * *",
+    available: () => platform().target !== "desktop",
+    run: async () => {
+      const r = await scanInstanceUpdates();
+      return { scanned: r.scanned, supported: r.supported, behind: r.behind };
+    },
+  },
+  {
+    key: "modules:scan",
+    label: "Native-module update scan",
+    // Detect drift for server-installed infra (OpenResty, …) against the signed
+    // catalog and cache it in server_module_status so the Components tab renders
+    // "vX → vY, Update" without re-probing. Detection only — never auto-applies
+    // (auto/consent apply is explicit). Off-peak, self-hosted only.
+    defaultCron: "37 */6 * * *",
+    available: () => platform().target === "selfhosted",
+    run: async () => {
+      const r = await scanInstanceModules();
+      return { servers: r.servers, behind: r.behind };
     },
   },
   {

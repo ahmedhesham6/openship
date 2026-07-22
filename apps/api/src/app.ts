@@ -18,6 +18,7 @@ import { auth } from "./lib/auth";
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from "better-auth/plugins";
 import { projectRoutes } from "./modules/projects/project.routes";
 import { appRoutes } from "./modules/apps/app.routes";
+import { appSettingsRoutes } from "./modules/apps/app-settings.routes";
 import { deploymentRoutes } from "./modules/deployments/deployment.routes";
 import { domainRoutes } from "./modules/domains/domain.routes";
 import { jobRoutes } from "./modules/jobs/job.routes";
@@ -33,6 +34,7 @@ import { settingsRoutes } from "./modules/settings/settings.routes";
 import { tokenRoutes } from "./modules/tokens/token.routes";
 import { mcpRoutes } from "./modules/mcp/mcp.routes";
 import { notificationsRoutes } from "./modules/notifications/notifications.routes";
+import { updatesRoutes } from "./modules/updates/updates.routes";
 import { imageRoutes } from "./modules/images/images.routes";
 import { backupRoutes } from "./modules/backups/backup.routes";
 import { auditRoutes } from "./modules/audit/audit.routes";
@@ -42,6 +44,8 @@ import { backupDestinationRoutes } from "./modules/backup-destinations/destinati
 import { reconcileAllSchedules } from "./modules/backups/triggers/cron";
 import { reconcileJobs } from "./modules/jobs/job.service";
 import { scheduleBillingAnniversary } from "./modules/billing/billing-anniversary.cron";
+import { ensureOblienWebhook } from "./lib/openship-cloud";
+import { backfillWebhookSecrets } from "./modules/github/github.service";
 import { backupOrchestrator } from "./modules/backups/backup.orchestrator";
 import { getJobRunner } from "./lib/job-runner";
 import { repos } from "@repo/db";
@@ -114,6 +118,7 @@ app.route("/api/auth", authRoutes);
 app.route("/api/projects", projectRoutes);
 app.route("/api/apps", appRoutes);
 app.route("/api/projects/:id/services", serviceRoutes);
+app.route("/api/projects/:id/app-settings", appSettingsRoutes);
 app.route("/api/deployments", deploymentRoutes);
 app.route("/api/domains", domainRoutes);
 app.route("/api/webhooks", webhookRoutes);
@@ -130,6 +135,7 @@ app.route("/api/webhooks/backup", backupWebhookRoutes);
 app.route("/api/audit", auditRoutes);
 app.route("/api/permissions", permissionsRoutes);
 app.route("/api/notifications", notificationsRoutes);
+app.route("/api/updates", updatesRoutes);
 app.route("/api/jobs", jobRoutes);
 // Platform status notices — banner feed (public read) + operator push (internal).
 // Both modes; primarily consumed on the SaaS.
@@ -256,6 +262,16 @@ if (env.CLOUD_MODE) {
   void repos.project.clearStaleDeletions().then((n) => {
     if (n > 0) console.log(`[boot] cleared ${n} stale project deletion lock(s)`);
   }).catch((err) => console.warn("[boot] clearStaleDeletions failed:", err));
+  // A Docker migration is an in-memory FSM that quiesces (stops) the source
+  // containers before the target deploy — a restart mid-migration would strand
+  // a stopped production stack forever. Restart the originals + roll back any
+  // interrupted run. Self-hosted only (migrations don't run on the SaaS); the
+  // dynamic import keeps the SSH/runtime chain out of the cloud boot path.
+  if (!env.CLOUD_MODE) {
+    void import("./modules/migration/migration.orchestrator")
+      .then(({ migrationOrchestrator }) => migrationOrchestrator.recoverInterruptedMigrations())
+      .catch((err) => console.warn("[boot] migration recovery failed:", err));
+  }
 
   const runner = await getJobRunner();
   await runner.start({
@@ -278,6 +294,21 @@ if (env.CLOUD_MODE) {
   // free-tier orgs).
   void scheduleBillingAnniversary().catch((err) =>
     console.warn("[boot] scheduleBillingAnniversary failed:", err),
+  );
+
+  // Register the Oblien billing webhook (credits usage/low/depleted + quota
+  // threshold). Idempotent + self-gating on CLOUD_MODE; without it Oblien
+  // never calls our receiver.
+  void ensureOblienWebhook().catch((err) =>
+    console.warn("[boot] ensureOblienWebhook failed:", err),
+  );
+
+  // Self-hosted only: backfill per-project GitHub webhook secrets for
+  // auto-deploy projects registered before per-project secrets were wired
+  // (self-gates on !CLOUD_MODE). Fixes silently-broken auto-deploy on installs
+  // that followed the "GITHUB_WEBHOOK_SECRET is ignored" guidance.
+  void backfillWebhookSecrets().catch((err) =>
+    console.warn("[boot] backfillWebhookSecrets failed:", err),
   );
 
   // Re-register every enabled cron policy with the runner.

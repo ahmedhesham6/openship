@@ -46,6 +46,7 @@ import { transferLocalDirectory } from "./transfer";
 import { prepareStackOutput, resolveProjectDir } from "./stack-output";
 import type { ProcessSupervisor } from "./supervisor/types";
 import { detectSupervisor } from "./supervisor/detect";
+import { probeListeningPort } from "./port-conflict";
 import { posix as pathPosix } from "node:path";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -508,6 +509,29 @@ export class BareRuntime implements RuntimeAdapter {
   // ── Deploy lifecycle ───────────────────────────────────────────────────
 
   async deploy(config: DeployConfig, _onLog?: LogCallback): Promise<DeploymentResult> {
+    // Adopt mode: attach to an already-running, externally-supervised process
+    // (e.g. the Openship control plane launched by `openship up`). We never
+    // promote a build artifact or start a supervisor unit — that would bind a
+    // second process to the port. We only health-probe and return a running
+    // result so the routing/SSL pipeline can own this deployment. containerId is
+    // set to the deploymentId (same convention as a real bare deploy) so the
+    // route-registration containerId guard is satisfied.
+    if (config.adopt) {
+      const occupant = await probeListeningPort(this.executor, config.port);
+      _onLog?.({
+        timestamp: new Date().toISOString(),
+        level: occupant ? "info" : "warn",
+        message: occupant
+          ? `[adopt] attached to process on port ${config.port}: ${occupant.command}\n`
+          : `[adopt] no process is listening on port ${config.port} yet — routing will attach when it comes up\n`,
+      });
+      return {
+        deploymentId: config.deploymentId,
+        containerId: config.deploymentId,
+        status: "running",
+      };
+    }
+
     const stagedDir = config.imageRef ?? this.projectDir(config.projectId);
     const workDir = config.imageRef
       ? await this.promoteBuildArtifact(
@@ -580,9 +604,24 @@ export class BareRuntime implements RuntimeAdapter {
       return containerId;
     }
 
-    return outputDirectory.startsWith("/")
-      ? outputDirectory
-      : pathPosix.join(containerId, outputDirectory);
+    // SECURITY: the return value becomes OpenResty's `root <dir>;`. It MUST stay
+    // inside the deployment's own workDir — an absolute path (e.g. "/", "/etc")
+    // or a `../`-traversal would point the document root at the host filesystem,
+    // serving /etc/passwd, other tenants' builds, TLS keys, etc. over the app's
+    // public domain (arbitrary file disclosure). Reject absolute, confine relative.
+    if (outputDirectory.startsWith("/")) {
+      throw new Error(
+        `Invalid outputDirectory "${outputDirectory}": must be relative to the project (absolute paths are not allowed).`,
+      );
+    }
+    const base = containerId.replace(/\/+$/, "");
+    const resolved = pathPosix.normalize(pathPosix.join(base, outputDirectory));
+    if (resolved !== base && !resolved.startsWith(`${base}/`)) {
+      throw new Error(
+        `Invalid outputDirectory "${outputDirectory}": escapes the deployment directory.`,
+      );
+    }
+    return resolved;
   }
 
   async stop(containerId: string): Promise<void> {

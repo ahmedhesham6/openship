@@ -31,7 +31,49 @@
     "createLabel": "Nouveau projet",
     "settingsText": "Configurez les variables d'environnement et les domaines personnalisés dans les paramètres du projet.",
     "settingsLabel": "Paramètres du projet",
-    "connected": "Connecté"
+    "connected": "Connecté",
+    "tips": {
+      "envVars": {
+        "text": "Ajoutez des variables d'environnement et des secrets chiffrés à n'importe quel projet.",
+        "label": "Ouvrir les projets"
+      },
+      "customDomain": {
+        "text": "Pointez un domaine personnalisé vers un projet — le HTTPS est provisionné automatiquement.",
+        "label": "Ouvrir les projets"
+      },
+      "autoDeploy": {
+        "text": "Connectez GitHub pour déployer automatiquement à chaque push, sans CI à configurer.",
+        "label": "Ouvrir les paramètres Git"
+      },
+      "rollback": {
+        "text": "Revenez à n'importe quel déploiement précédent en un clic.",
+        "label": "Voir les déploiements"
+      },
+      "apps": {
+        "text": "Installez des applications auto-hébergées comme Gitea, n8n et Metabase en un clic.",
+        "label": "Parcourir les applications"
+      },
+      "servers": {
+        "text": "Connectez vos propres serveurs via SSH et déployez-y depuis ici.",
+        "label": "Gérer les serveurs"
+      },
+      "jobs": {
+        "text": "Planifiez des commandes avec des tâches cron — nouvelles tentatives, journaux en direct et historique inclus.",
+        "label": "Ouvrir les tâches"
+      },
+      "backups": {
+        "text": "Configurez des sauvegardes automatiques pour vos bases de données et volumes.",
+        "label": "Configurer les sauvegardes"
+      },
+      "mail": {
+        "text": "Exécutez votre propre serveur de messagerie et webmail, entièrement auto-hébergé.",
+        "label": "Configurer la messagerie"
+      },
+      "team": {
+        "text": "Invitez des coéquipiers et définissez leur accès par projet.",
+        "label": "Gérer l'équipe"
+      }
+    }
   },
   "welcome": {
     "title": "Lancez votre premier projet",
@@ -98,5 +140,13 @@
     "title": "Utilisation des tokens",
     "lastNDays": "{period} derniers jours",
     "tokensTooltip": "{count} tokens"
+  },
+  "updates": {
+    "title": "Updates available",
+    "updateAction": "Update",
+    "updating": "Updating…",
+    "newVersion": "New version",
+    "started": "Updating {name}…",
+    "failed": "Couldn't start the update. Please try again."
   }
 }

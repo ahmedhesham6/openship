@@ -6,6 +6,16 @@ import {
 import type { ComponentState } from "./types";
 import { useI18n } from "@/components/i18n-provider";
 
+/** Component name → i18n key for its human/business role; technical name stays
+ *  as a small secondary tag. Mirrors the server-detail health list. */
+const ROLE_KEY: Record<string, string> = {
+  docker: "roleDocker",
+  git: "roleGit",
+  openresty: "roleOpenresty",
+  certbot: "roleCertbot",
+  rsync: "roleRsync",
+};
+
 export function ComponentRow({
   component,
   showInstall,
@@ -15,6 +25,10 @@ export function ComponentRow({
 }) {
   const { t } = useI18n();
   const isHealthy = component.status?.healthy;
+  const techName = component.label || component.name;
+  const roleName =
+    (t.servers.components as Record<string, string>)[ROLE_KEY[component.name] ?? ""] ?? techName;
+  const showTech = roleName !== techName;
   const isInstalling = component.installState === "installing";
   const isInstalled = component.installState === "installed";
   const isFailed = component.installState === "failed";
@@ -35,7 +49,10 @@ export function ComponentRow({
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-foreground">{component.label}</p>
+          <p className="text-sm font-medium text-foreground">{roleName}</p>
+          {showTech && (
+            <span className="text-xs font-medium text-muted-foreground/70">{techName}</span>
+          )}
           {component.status?.version && (
             <span className="text-xs text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded">
               v{component.status.version}

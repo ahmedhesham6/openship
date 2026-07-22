@@ -145,8 +145,8 @@ export function AddServerModal({ onCancel, onCreated }: AddServerModalProps) {
       {/* Header */}
       <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-border/50">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 bg-blue-500/10 rounded-xl flex items-center justify-center shrink-0">
-            <Server className="size-[18px] text-blue-500" />
+          <div className="w-9 h-9 bg-info-bg rounded-xl flex items-center justify-center shrink-0">
+            <Server className="size-[18px] text-info" />
           </div>
           <div className="min-w-0">
             <h2 className="font-semibold text-foreground text-[15px] truncate">
