@@ -125,4 +125,56 @@ describe("runPreflightChecks", () => {
     expect(result.ok).toBe(true);
     expect(result.checks.some((check) => check.status === "fail")).toBe(false);
   });
+
+  it("does not require framework build fields for compose service deploys", async () => {
+    const result = await runPreflightChecks(
+      {
+        repoUrl: "",
+        localPath: "/srv/my-stack",
+        branch: "main",
+        framework: "docker-compose",
+        buildImage: null,
+        installCommand: null,
+        buildCommand: null,
+        startCommand: null,
+        port: 3000,
+        hasBuild: true,
+        hasServer: true,
+        deployTarget: "server",
+        organizationId: "org-1",
+      } as any,
+      {
+        ctx: { userId: "user-1", organizationId: "org-1" } as any,
+        buildStrategy: "local",
+        multiService: true,
+        composeServices: [
+          {
+            kind: "compose",
+            name: "web",
+            build: ".",
+            dockerfile: "Dockerfile",
+            ports: ["3000:3000"],
+            dependsOn: [],
+            environment: {},
+            volumes: [],
+            exposed: false,
+          },
+        ],
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "config",
+          label: "Service configuration",
+          status: "pass",
+        }),
+      ]),
+    );
+    expect(result.checks.some((check) => check.message?.includes("build image"))).toBe(false);
+    expect(result.checks.some((check) => check.message?.includes("install command"))).toBe(false);
+    expect(result.checks.some((check) => check.message?.includes("start command"))).toBe(false);
+  });
 });

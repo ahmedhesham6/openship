@@ -1457,9 +1457,16 @@ export async function triggerDeployment(
     );
   }
 
+  const { useServicePipeline, servicePreflightServices } = await resolveServicePipelineMode(
+    project,
+    snapshot,
+  );
+
   // ── Preflight: validate config before creating any resources ────
   await runDeploymentPreflight(snapshot, routeState, {
     ctx,
+    composeServices: servicePreflightServices,
+    multiService: useServicePipeline,
     gitOwner: project.gitOwner,
     projectId: project.id,
   });
