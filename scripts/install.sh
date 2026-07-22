@@ -18,6 +18,34 @@ command -v curl >/dev/null 2>&1 || { err "curl is required"; exit 1; }
 
 # 1. Ensure Bun (the runtime). Installs to ~/.bun by default; no Node/npm.
 if ! command -v bun >/dev/null 2>&1; then
+  # Bun's installer unpacks a .zip, so it needs `unzip` — minimal server images
+  # (Ubuntu/Debian netinstall, Alpine, …) don't ship it, and Bun then dies with
+  # a cryptic "unzip is required". Install it first via whatever package manager
+  # is present (root or via sudo), else fail with a clear, actionable message.
+  if ! command -v unzip >/dev/null 2>&1; then
+    info "Installing unzip (required by the Bun installer)…"
+    SUDO=""
+    if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
+    if command -v apt-get >/dev/null 2>&1; then
+      $SUDO apt-get update -y || true
+      $SUDO apt-get install -y unzip || true
+    elif command -v dnf >/dev/null 2>&1; then
+      $SUDO dnf install -y unzip || true
+    elif command -v yum >/dev/null 2>&1; then
+      $SUDO yum install -y unzip || true
+    elif command -v apk >/dev/null 2>&1; then
+      $SUDO apk add --no-cache unzip || true
+    elif command -v pacman >/dev/null 2>&1; then
+      $SUDO pacman -Sy --noconfirm unzip || true
+    elif command -v zypper >/dev/null 2>&1; then
+      $SUDO zypper install -y unzip || true
+    fi
+    command -v unzip >/dev/null 2>&1 || {
+      err "unzip is required to install Bun but couldn't be installed automatically. Install it (e.g. 'apt-get install unzip') and re-run."
+      exit 1
+    }
+  fi
+
   info "Installing the Bun runtime…"
   curl -fsSL https://bun.sh/install | bash
   BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
