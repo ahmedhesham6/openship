@@ -41,7 +41,10 @@
     "readOnlyDesc": "Le client peut consulter mais ne peut pas déployer, modifier ou supprimer.",
     "missingClientId": "client_id manquant — ce lien d'autorisation est invalide.",
     "deny": "Refuser",
-    "authorize": "Autoriser"
+    "authorize": "Autoriser",
+    "summaryOwn": "Peut créer des projets dans {org} et gérer uniquement ceux qu'il crée — rien d'autre n'est visible.",
+    "ownTitle": "Uniquement les projets qu'il crée",
+    "ownDesc": "Le client peut créer de nouveaux projets et gérer entièrement ceux qu'il crée — il ne peut ni voir ni toucher quoi que ce soit d'autre dans {org}."
   },
   "acceptInvite": {
     "invalidInvitation": "Invitation invalide",

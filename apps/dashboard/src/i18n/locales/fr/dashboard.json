@@ -46,7 +46,9 @@
       "hours": "il y a {n} h",
       "days": "il y a {n} j",
       "months": "il y a {n} mois"
-    }
+    },
+    "appsEmptyTitle": "Aucune application pour le moment",
+    "appsEmptyDesc": "En un clic, entièrement auto-hébergé — bases de données, automatisation, analytique, coffres de mots de passe et plus encore, sur vos propres serveurs."
   },
   "nav": {
     "home": "Accueil",
@@ -65,7 +67,9 @@
       "settings": "Paramètres",
       "infrastructure": "Infrastructure",
       "account": "Compte"
-    }
+    },
+    "apps": "Applications",
+    "jobs": "Tâches"
   },
   "sidebar": {
     "expand": "Développer la barre latérale",
@@ -132,6 +136,38 @@
     "billing": {
       "title": "Facturation",
       "description": "Gérez votre abonnement, votre consommation et vos moyens de paiement."
+    },
+    "apps": {
+      "title": "Applications",
+      "description": "Services gérés en un clic — installez et exécutez Convex, WordPress, la messagerie, et plus encore.",
+      "createButton": "Installer une application",
+      "loading": "Chargement des applications…",
+      "countOne": "{count} application installée",
+      "countOther": "{count} applications installées",
+      "emptyTitle": "Installez votre première application",
+      "emptyDescription": "Démarrez Convex, n8n, Ghost et plus encore — en un clic, entièrement auto-hébergé. Choisissez-en une pour commencer.",
+      "popular": "Applications populaires",
+      "alsoDeploy": "Vous pouvez aussi déployer",
+      "browseAll": "Parcourir toutes les applications",
+      "catalogTitle": "Installer une application",
+      "catalogDescription": "Services gérés en un clic. Choisissez-en une pour l'installer comme application.",
+      "catalogSearchPlaceholder": "Rechercher des applications…",
+      "catalogNoResults": "Aucune application ne correspond à votre recherche.",
+      "categories": {
+        "all": "Toutes",
+        "backend": "Backend",
+        "database": "Base de données",
+        "cms": "CMS",
+        "analytics": "Analytique",
+        "automation": "Automatisation",
+        "mail": "Messagerie",
+        "other": "Outils"
+      },
+      "installing": "Installation…",
+      "install": "Installer",
+      "cancel": "Annuler",
+      "nameLabel": "Nom",
+      "configTitle": "Configurer {app}"
     }
   },
   "quickLinks": {

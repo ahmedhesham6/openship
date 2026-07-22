@@ -2,7 +2,12 @@
 export { db, getDriver, getPgPool, closeDb, type Database, type Driver } from "./client";
 
 // ─── Advisory locking (cross-process serialization) ──────────────────────────
-export { withAdvisoryLock, hashStringToInt } from "./advisory-lock";
+export {
+  withAdvisoryLock,
+  tryAcquireAdvisoryLock,
+  hashStringToInt,
+  type AdvisoryLockHandle,
+} from "./advisory-lock";
 
 // ─── Schema (table definitions) ──────────────────────────────────────────────
 export * as schema from "./schema";

@@ -7,7 +7,9 @@
   },
   "topBar": {
     "website": "Site web",
-    "github": "GitHub"
+    "github": "GitHub",
+    "theme": "Changer le thème",
+    "language": "Langue"
   },
   "choose": {
     "title": "Bienvenue sur Openship",
@@ -29,7 +31,8 @@
       "perk3": "Nous nous occupons du reste",
       "cta": "Configurer mon serveur"
     },
-    "migrateNote": "Basculez entre Cloud et Auto-hébergé à tout moment en un clic, sans aucune dépendance, jamais."
+    "migrateNote": "Basculez entre Cloud et Auto-hébergé à tout moment en un clic, sans aucune dépendance, jamais.",
+    "skip": "Passer pour l'instant"
   },
   "selfhost": {
     "title": "Où exécuter Openship ?",
@@ -38,7 +41,9 @@
     "local": {
       "title": "Cette machine",
       "badge": "Bêta",
-      "desc": "Installez Openship directement ici, sans SSH ni configuration distante"
+      "desc": "Installez Openship directement ici, sans SSH ni configuration distante",
+      "comingSoon": "Bientôt disponible",
+      "comingSoonDesc": "Exécuter Openship directement sur cette machine n'est pas encore prêt — connectez un serveur pour l'instant."
     },
     "remote": {
       "title": "Un autre serveur",
@@ -68,7 +73,12 @@
     "jumpHostLabel": "Hôte de rebond",
     "extraArgsLabel": "Arguments SSH supplémentaires",
     "submit": "Enregistrer et continuer",
-    "tutorial": "Tutoriel de configuration étape par étape"
+    "tutorial": "Tutoriel de configuration étape par étape",
+    "testConnection": "Tester la connexion",
+    "testing": "Test…",
+    "connected": "Connecté",
+    "testFailed": "Échec de la connexion",
+    "testHint": "Vérifiez que le serveur est accessible avant de continuer."
   },
   "tunnel": {
     "title": "Accès Internet",
