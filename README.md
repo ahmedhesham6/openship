@@ -200,6 +200,12 @@ first reports.
 
 ---
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=oblien/openship&type=Date)](https://star-history.com/#oblien/openship&Date)
+
+---
+
 ## License
 
 Openship is **open-source** software, licensed under the [Apache License 2.0](LICENSE).
