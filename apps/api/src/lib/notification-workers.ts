@@ -72,6 +72,71 @@ function renderMessage(delivery: NotificationDelivery): RenderedMessage {
   };
 }
 
+/* ─── Chat-webhook payload builders ───────────────────────────────────────── */
+
+// Slack Block Kit caps a `section` text object at 3000 characters and a
+// `header` plain_text at 150; a Discord embed caps `title` at 256 and
+// `description` at 4096.
+const SLACK_HEADER_LIMIT = 150;
+const SLACK_SECTION_LIMIT = 3000;
+const DISCORD_TITLE_LIMIT = 256;
+const DISCORD_DESCRIPTION_LIMIT = 4096;
+
+// The Slack section body is wrapped in a ```…``` code fence — reserve its width
+// so the wrapped text still fits SLACK_SECTION_LIMIT.
+const SLACK_CODE_FENCE_OVERHEAD = "```\n".length + "\n```".length;
+
+/** Clamp `text` to `max` characters, marking a cut with a trailing ellipsis. */
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+interface SlackMessage {
+  text: string;
+  blocks: Array<Record<string, unknown>>;
+}
+
+/** Slack incoming-webhook payload for a rendered message, clamped to Slack's
+ *  block-text limits. */
+export function buildSlackMessage(input: { title: string; body: string }): SlackMessage {
+  const title = truncate(input.title, SLACK_HEADER_LIMIT);
+  const body = truncate(input.body, SLACK_SECTION_LIMIT - SLACK_CODE_FENCE_OVERHEAD);
+  return {
+    text: title,
+    blocks: [
+      { type: "header", text: { type: "plain_text", text: title } },
+      { type: "section", text: { type: "mrkdwn", text: "```\n" + body + "\n```" } },
+    ],
+  };
+}
+
+interface DiscordMessage {
+  username: string;
+  avatar_url: string;
+  embeds: Array<Record<string, unknown>>;
+}
+
+/** Discord webhook payload (single embed) for a rendered message, clamped to
+ *  Discord's embed title/description limits. */
+export function buildDiscordMessage(input: {
+  title: string;
+  body: string;
+  timestamp: string;
+}): DiscordMessage {
+  return {
+    username: "Openship",
+    avatar_url: "https://openship.io/favicon.ico",
+    embeds: [
+      {
+        title: truncate(input.title, DISCORD_TITLE_LIMIT),
+        description: truncate(input.body, DISCORD_DESCRIPTION_LIMIT),
+        color: 0x3b82f6,
+        timestamp: input.timestamp,
+      },
+    ],
+  };
+}
+
 /* ─── Channel workers ─────────────────────────────────────────────────────── */
 
 async function sendEmail(
@@ -166,18 +231,11 @@ async function sendDiscord(
   const webhookUrl = decrypt(config.webhookUrl);
 
   const { title, body } = renderMessage(delivery);
-  const discordPayload = {
-    username: "Openship",
-    avatar_url: "https://openship.io/favicon.ico",
-    embeds: [
-      {
-        title,
-        description: body,
-        color: 0x3b82f6,
-        timestamp: new Date(delivery.createdAt).toISOString(),
-      },
-    ],
-  };
+  const discordPayload = buildDiscordMessage({
+    title,
+    body,
+    timestamp: new Date(delivery.createdAt).toISOString(),
+  });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
@@ -211,19 +269,7 @@ async function sendSlack(
   const webhookUrl = decrypt(config.webhookUrl);
 
   const { title, body } = renderMessage(delivery);
-  const slackPayload = {
-    text: title,
-    blocks: [
-      {
-        type: "header",
-        text: { type: "plain_text", text: title },
-      },
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: "```\n" + body + "\n```" },
-      },
-    ],
-  };
+  const slackPayload = buildSlackMessage({ title, body });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
