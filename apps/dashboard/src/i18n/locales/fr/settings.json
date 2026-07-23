@@ -458,12 +458,14 @@
     },
     "describe": {
       "slackWebhook": "Webhook Slack",
+      "discordWebhook": "Webhook Discord",
       "inApp": "Icône cloche du tableau de bord"
     },
     "kinds": {
       "email": "E-mail",
       "webhook": "Webhook",
       "slack": "Slack",
+      "discord": "Discord",
       "in_app": "Dans l'application"
     },
     "form": {
@@ -471,6 +473,7 @@
       "emailPlaceholder": "vous@exemple.com",
       "webhookPlaceholder": "https://example.com/openship-hook",
       "slackPlaceholder": "https://hooks.slack.com/services/...",
+      "discordPlaceholder": "https://discord.com/api/webhooks/...",
       "adding": "Ajout…",
       "addChannel": "Ajouter un canal",
       "labelRequired": "Le libellé est requis"

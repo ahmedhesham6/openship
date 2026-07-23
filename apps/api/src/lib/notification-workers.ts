@@ -153,6 +153,50 @@ async function sendInApp(_delivery: NotificationDelivery): Promise<void> {
   // inbox. The runner will mark this as sent immediately on return.
 }
 
+async function sendDiscord(
+  delivery: NotificationDelivery,
+  channel: NotificationChannel,
+): Promise<void> {
+  const config = channel.config as { webhookUrl?: string };
+  if (!config?.webhookUrl) {
+    throw new Error("Discord channel has no webhook URL configured");
+  }
+
+  // Webhook URL is encrypted at storage time.
+  const webhookUrl = decrypt(config.webhookUrl);
+
+  const { title, body } = renderMessage(delivery);
+  const discordPayload = {
+    username: "Openship",
+    avatar_url: "https://openship.io/favicon.ico",
+    embeds: [
+      {
+        title,
+        description: body,
+        color: 0x3b82f6,
+        timestamp: new Date(delivery.createdAt).toISOString(),
+      },
+    ],
+  };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(discordPayload),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Discord webhook returned ${res.status}: ${text.slice(0, 200)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function sendSlack(
   delivery: NotificationDelivery,
   channel: NotificationChannel,
@@ -209,6 +253,7 @@ const WORKERS: Record<
   webhook: sendWebhook,
   in_app: sendInApp,
   slack: sendSlack,
+  discord: sendDiscord,
 };
 
 /* ─── Runner loop ─────────────────────────────────────────────────────────── */
@@ -238,22 +283,14 @@ export async function processQueuedNotifications(): Promise<void> {
       // Resolve channel — null channelId means the subscription pointed
       // at a now-deleted channel. Mark failed permanently.
       if (!delivery.channelId) {
-        await repos.notificationDelivery.markFailed(
-          delivery.id,
-          "Channel deleted",
-          false,
-        );
+        await repos.notificationDelivery.markFailed(delivery.id, "Channel deleted", false);
         return;
       }
       const channel = await repos.notificationChannel
         .findById(delivery.channelId)
         .catch(() => undefined);
       if (!channel) {
-        await repos.notificationDelivery.markFailed(
-          delivery.id,
-          "Channel not found",
-          false,
-        );
+        await repos.notificationDelivery.markFailed(delivery.id, "Channel not found", false);
         return;
       }
 

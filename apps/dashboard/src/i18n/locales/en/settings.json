@@ -499,12 +499,14 @@
     },
     "describe": {
       "slackWebhook": "Slack webhook",
+      "discordWebhook": "Discord webhook",
       "inApp": "Dashboard bell icon"
     },
     "kinds": {
       "email": "Email",
       "webhook": "Webhook",
       "slack": "Slack",
+      "discord": "Discord",
       "in_app": "In-app"
     },
     "form": {
@@ -512,6 +514,7 @@
       "emailPlaceholder": "you@example.com",
       "webhookPlaceholder": "https://example.com/openship-hook",
       "slackPlaceholder": "https://hooks.slack.com/services/...",
+      "discordPlaceholder": "https://discord.com/api/webhooks/...",
       "adding": "Adding…",
       "addChannel": "Add channel",
       "labelRequired": "Label is required",

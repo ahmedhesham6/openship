@@ -23,7 +23,7 @@ import { encrypt } from "../../lib/encryption";
 import { CATEGORIES } from "../../lib/notification-categories";
 import { randomBytes } from "node:crypto";
 
-const VALID_CHANNEL_KINDS = new Set(["email", "webhook", "in_app", "slack"]);
+const VALID_CHANNEL_KINDS = new Set(["email", "webhook", "in_app", "slack", "discord"]);
 
 /* ─── Categories (static, no DB) ─────────────────────────────────────── */
 
@@ -81,7 +81,10 @@ export async function createChannel(c: Context) {
   });
 
   return c.json({
-    channel: { ...channel, config: redactChannelConfig(channel.kind, channel.config as Record<string, unknown>) },
+    channel: {
+      ...channel,
+      config: redactChannelConfig(channel.kind, channel.config as Record<string, unknown>),
+    },
   });
 }
 
@@ -124,7 +127,10 @@ export async function updateChannel(c: Context) {
 
   return c.json({
     channel: channel
-      ? { ...channel, config: redactChannelConfig(channel.kind, channel.config as Record<string, unknown>) }
+      ? {
+          ...channel,
+          config: redactChannelConfig(channel.kind, channel.config as Record<string, unknown>),
+        }
       : null,
   });
 }
@@ -157,7 +163,10 @@ export async function deleteChannel(c: Context) {
 /** GET /subscriptions — list calling user's subscriptions for the active org. */
 export async function listSubscriptions(c: Context) {
   const ctx = getRequestContext(c);
-  const subs = await repos.notificationSubscription.listForUserInOrg(ctx.userId, ctx.organizationId);
+  const subs = await repos.notificationSubscription.listForUserInOrg(
+    ctx.userId,
+    ctx.organizationId,
+  );
   return c.json({ subscriptions: subs });
 }
 
@@ -241,7 +250,11 @@ export async function upsertDefault(c: Context) {
     eventType: "notification_default.updated",
     resourceType: "notifications",
     resourceId: `${ctx.organizationId}:${body.category}`,
-    after: { category: def.category, defaultEnabled: def.defaultEnabled, defaultChannelKind: def.defaultChannelKind },
+    after: {
+      category: def.category,
+      defaultEnabled: def.defaultEnabled,
+      defaultChannelKind: def.defaultChannelKind,
+    },
   });
 
   return c.json({ default: def });
@@ -254,11 +267,10 @@ export async function listDeliveries(c: Context) {
   const ctx = getRequestContext(c);
   const unseenOnly = c.req.query("unseen") === "true";
   const limit = Math.min(parseInt(c.req.query("limit") ?? "100", 10) || 100, 500);
-  const deliveries = await repos.notificationDelivery.listForUser(
-    ctx.userId,
-    ctx.organizationId,
-    { unseenOnly, limit },
-  );
+  const deliveries = await repos.notificationDelivery.listForUser(ctx.userId, ctx.organizationId, {
+    unseenOnly,
+    limit,
+  });
   return c.json({ deliveries });
 }
 
@@ -280,8 +292,14 @@ export async function markSeen(c: Context) {
 
 /* ─── Helpers ────────────────────────────────────────────────────────── */
 
-interface ConfigOk { ok: true; value: Record<string, unknown> }
-interface ConfigErr { ok: false; error: string }
+interface ConfigOk {
+  ok: true;
+  value: Record<string, unknown>;
+}
+interface ConfigErr {
+  ok: false;
+  error: string;
+}
 
 /**
  * Sanitize + normalize the inbound config per kind. Secrets (webhook
@@ -290,10 +308,7 @@ interface ConfigErr { ok: false; error: string }
  *
  * Returns either { ok: true, value } or { ok: false, error }.
  */
-function sanitizeChannelConfig(
-  kind: string,
-  raw: unknown,
-): ConfigOk | ConfigErr {
+function sanitizeChannelConfig(kind: string, raw: unknown): ConfigOk | ConfigErr {
   const cfg = (raw ?? {}) as Record<string, unknown>;
   switch (kind) {
     case "email": {
@@ -308,9 +323,10 @@ function sanitizeChannelConfig(
       if (!/^https?:\/\//.test(url)) return { ok: false, error: "Invalid webhook URL" };
       // Auto-generate a signing secret if the user didn't supply one —
       // we'll show it back via the verification flow so they can save it.
-      const rawSecret = typeof cfg.hmacSecret === "string" && cfg.hmacSecret.length > 0
-        ? cfg.hmacSecret
-        : randomBytes(32).toString("base64url");
+      const rawSecret =
+        typeof cfg.hmacSecret === "string" && cfg.hmacSecret.length > 0
+          ? cfg.hmacSecret
+          : randomBytes(32).toString("base64url");
       return { ok: true, value: { url, hmacSecret: encrypt(rawSecret) } };
     }
     case "in_app":
@@ -322,6 +338,17 @@ function sanitizeChannelConfig(
       }
       const out: Record<string, unknown> = { webhookUrl: encrypt(webhookUrl) };
       if (typeof cfg.channelName === "string") out.channelName = cfg.channelName;
+      return { ok: true, value: out };
+    }
+    case "discord": {
+      const webhookUrl = String(cfg.webhookUrl ?? "").trim();
+      if (
+        !webhookUrl.startsWith("https://discord.com/api/webhooks/") &&
+        !webhookUrl.startsWith("https://discordapp.com/api/webhooks/")
+      ) {
+        return { ok: false, error: "Invalid Discord webhook URL" };
+      }
+      const out: Record<string, unknown> = { webhookUrl: encrypt(webhookUrl) };
       return { ok: true, value: out };
     }
     default:
@@ -354,6 +381,10 @@ function redactChannelConfig(
       return {
         webhookUrlConfigured: !!cfg.webhookUrl,
         channelName: cfg.channelName ?? null,
+      };
+    case "discord":
+      return {
+        webhookUrlConfigured: !!cfg.webhookUrl,
       };
     default:
       return {};

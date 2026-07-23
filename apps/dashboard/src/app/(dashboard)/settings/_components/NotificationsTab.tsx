@@ -19,7 +19,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Bell, Mail, Webhook, MessageSquare, Smartphone, Plus, Trash2, Loader2, AlertTriangle } from "lucide-react";
+import {
+  Bell,
+  Mail,
+  Webhook,
+  MessageSquare,
+  MessageCircle,
+  Smartphone,
+  Plus,
+  Trash2,
+  Loader2,
+  AlertTriangle,
+} from "lucide-react";
 import { systemApi } from "@/lib/api/system";
 import { useToast } from "@/context/ToastContext";
 import { SettingsSection } from "./SettingsSection";
@@ -40,6 +51,7 @@ const CHANNEL_ICONS: Record<ChannelKind, React.ElementType> = {
   email: Mail,
   webhook: Webhook,
   slack: MessageSquare,
+  discord: MessageCircle,
   in_app: Smartphone,
 };
 
@@ -47,6 +59,7 @@ const CHANNEL_LABELS: Record<ChannelKind, string> = {
   email: "Email",
   webhook: "Webhook",
   slack: "Slack",
+  discord: "Discord",
   in_app: "In-app",
 };
 
@@ -65,26 +78,29 @@ export function NotificationsTab() {
   // a toggle/mutation so only the clicked control shows its pending state (its
   // own busy flag) instead of the whole tab collapsing to a centered spinner.
   // The global spinner is reserved for the very first load.
-  const refresh = useCallback(async (opts?: { silent?: boolean }) => {
-    const silent = opts?.silent ?? false;
-    if (!silent) setLoading(true);
-    try {
-      const [cats, ch, subs, defs] = await Promise.all([
-        notificationsApi.listCategories(),
-        notificationsApi.listChannels(),
-        notificationsApi.listSubscriptions(),
-        notificationsApi.listDefaults().catch(() => ({ defaults: [] })),
-      ]);
-      setCategories(cats.categories);
-      setChannels(ch.channels);
-      setSubscriptions(subs.subscriptions);
-      setDefaults(defs.defaults);
-    } catch (err) {
-      showToast(getApiErrorMessage(err), "error", "Notifications");
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [showToast]);
+  const refresh = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = opts?.silent ?? false;
+      if (!silent) setLoading(true);
+      try {
+        const [cats, ch, subs, defs] = await Promise.all([
+          notificationsApi.listCategories(),
+          notificationsApi.listChannels(),
+          notificationsApi.listSubscriptions(),
+          notificationsApi.listDefaults().catch(() => ({ defaults: [] })),
+        ]);
+        setCategories(cats.categories);
+        setChannels(ch.channels);
+        setSubscriptions(subs.subscriptions);
+        setDefaults(defs.defaults);
+      } catch (err) {
+        showToast(getApiErrorMessage(err), "error", "Notifications");
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [showToast],
+  );
 
   useEffect(() => {
     void refresh();
@@ -94,13 +110,15 @@ export function NotificationsTab() {
   useEffect(() => {
     (async () => {
       try {
-        const result = await (authClient as unknown as {
-          organization: {
-            getFullOrganization: () => Promise<{
-              data?: { members?: Array<{ userId: string; role: string }>; id: string } | null;
-            }>;
-          };
-        }).organization.getFullOrganization();
+        const result = await (
+          authClient as unknown as {
+            organization: {
+              getFullOrganization: () => Promise<{
+                data?: { members?: Array<{ userId: string; role: string }>; id: string } | null;
+              }>;
+            };
+          }
+        ).organization.getFullOrganization();
         const session = await authClient.getSession();
         const userId = session.data?.user?.id;
         const me = result.data?.members?.find((m) => m.userId === userId);
@@ -156,7 +174,11 @@ function ChannelsCard({
     if (!confirm(t.settings.notifications.channels.confirmDelete)) return;
     try {
       await notificationsApi.deleteChannel(id);
-      showToast(t.settings.notifications.channels.channelRemoved, "success", t.settings.common.toast.notifications);
+      showToast(
+        t.settings.notifications.channels.channelRemoved,
+        "success",
+        t.settings.common.toast.notifications,
+      );
       await onChange();
     } catch (err) {
       showToast(getApiErrorMessage(err), "error", t.settings.common.toast.notifications);
@@ -182,13 +204,19 @@ function ChannelsCard({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-foreground truncate">{ch.label}</p>
-                  <p className="text-xs text-muted-foreground truncate">{describeChannel(ch, t.settings.notifications.describe)}</p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {describeChannel(ch, t.settings.notifications.describe)}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   {ch.verified ? (
-                    <span className="text-[11px] uppercase tracking-wide text-success">{t.settings.notifications.channels.verified}</span>
+                    <span className="text-[11px] uppercase tracking-wide text-success">
+                      {t.settings.notifications.channels.verified}
+                    </span>
                   ) : ch.kind !== "in_app" ? (
-                    <span className="text-[11px] uppercase tracking-wide text-warning">{t.settings.notifications.channels.unverified}</span>
+                    <span className="text-[11px] uppercase tracking-wide text-warning">
+                      {t.settings.notifications.channels.unverified}
+                    </span>
                   ) : null}
                   <button
                     type="button"
@@ -231,7 +259,7 @@ function ChannelsCard({
 
 function describeChannel(
   ch: NotificationChannel,
-  labels: { slackWebhook: string; inApp: string },
+  labels: { slackWebhook: string; discordWebhook: string; inApp: string },
 ): string {
   switch (ch.kind) {
     case "email":
@@ -239,7 +267,11 @@ function describeChannel(
     case "webhook":
       return String((ch.config as { url?: string }).url ?? "");
     case "slack":
-      return String((ch.config as { channelName?: string | null }).channelName ?? labels.slackWebhook);
+      return String(
+        (ch.config as { channelName?: string | null }).channelName ?? labels.slackWebhook,
+      );
+    case "discord":
+      return labels.discordWebhook;
     case "in_app":
       return labels.inApp;
     default:
@@ -284,18 +316,26 @@ function NewChannelForm({
 
   const submit = async () => {
     if (!label.trim()) {
-      showToast(t.settings.notifications.form.labelRequired, "error", t.settings.common.toast.notifications);
+      showToast(
+        t.settings.notifications.form.labelRequired,
+        "error",
+        t.settings.common.toast.notifications,
+      );
       return;
     }
     let config: Record<string, unknown> = {};
     if (kind === "email") config = { address: address.trim() };
     else if (kind === "webhook") config = { url: url.trim() };
-    else if (kind === "slack") config = { webhookUrl: webhookUrl.trim() };
+    else if (kind === "slack" || kind === "discord") config = { webhookUrl: webhookUrl.trim() };
 
     setBusy(true);
     try {
       await notificationsApi.createChannel({ kind, label: label.trim(), config });
-      showToast(t.settings.notifications.channels.channelAdded, "success", t.settings.common.toast.notifications);
+      showToast(
+        t.settings.notifications.channels.channelAdded,
+        "success",
+        t.settings.common.toast.notifications,
+      );
       await onSaved();
     } catch (err) {
       showToast(getApiErrorMessage(err), "error", t.settings.common.toast.notifications);
@@ -315,6 +355,7 @@ function NewChannelForm({
           <option value="email">{t.settings.notifications.kinds.email}</option>
           <option value="webhook">{t.settings.notifications.kinds.webhook}</option>
           <option value="slack">{t.settings.notifications.kinds.slack}</option>
+          <option value="discord">{t.settings.notifications.kinds.discord}</option>
           <option value="in_app">{t.settings.notifications.kinds.in_app}</option>
         </select>
         <input
@@ -362,6 +403,15 @@ function NewChannelForm({
         <input
           type="url"
           placeholder={t.settings.notifications.form.slackPlaceholder}
+          value={webhookUrl}
+          onChange={(e) => setWebhookUrl(e.target.value)}
+          className="w-full bg-background border border-border/50 rounded-lg px-3 py-2 text-sm"
+        />
+      )}
+      {kind === "discord" && (
+        <input
+          type="url"
+          placeholder={t.settings.notifications.form.discordPlaceholder}
           value={webhookUrl}
           onChange={(e) => setWebhookUrl(e.target.value)}
           className="w-full bg-background border border-border/50 rounded-lg px-3 py-2 text-sm"
@@ -433,13 +483,17 @@ function SubscriptionsCard({
       description={t.settings.notifications.subscriptions.description}
     >
       {channels.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t.settings.notifications.subscriptions.empty}</p>
+        <p className="text-sm text-muted-foreground">
+          {t.settings.notifications.subscriptions.empty}
+        </p>
       ) : (
         <div className="overflow-x-auto -mx-5">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-start text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-5 py-2 font-medium">{t.settings.notifications.subscriptions.eventHeader}</th>
+                <th className="px-5 py-2 font-medium">
+                  {t.settings.notifications.subscriptions.eventHeader}
+                </th>
                 {channels.map((ch) => (
                   <th key={ch.id} className="px-3 py-2 font-medium text-center min-w-[100px]">
                     {ch.label}
@@ -466,7 +520,10 @@ function SubscriptionsCard({
                           checked={enabled}
                           onChange={(e) => toggle(cat.id, ch.id, e.target.checked)}
                           className="size-4 rounded border-border/50 cursor-pointer accent-foreground"
-                          aria-label={interpolate(t.settings.notifications.subscriptions.cellAria, { category: cat.label, channel: ch.label })}
+                          aria-label={interpolate(t.settings.notifications.subscriptions.cellAria, {
+                            category: cat.label,
+                            channel: ch.label,
+                          })}
                         />
                       </td>
                     );
@@ -548,13 +605,16 @@ function OrgDefaultsCard({
                 <option value="email">{t.settings.notifications.kinds.email}</option>
                 <option value="webhook">{t.settings.notifications.kinds.webhook}</option>
                 <option value="slack">{t.settings.notifications.kinds.slack}</option>
+                <option value="discord">{t.settings.notifications.kinds.discord}</option>
                 <option value="in_app">{t.settings.notifications.kinds.in_app}</option>
               </select>
               <Toggle
                 checked={enabled}
                 disabled={isBusy}
                 onChange={(v: boolean) => set(cat.id, v, kind)}
-                aria-label={interpolate(t.settings.notifications.orgDefaults.notifyAria, { category: cat.label })}
+                aria-label={interpolate(t.settings.notifications.orgDefaults.notifyAria, {
+                  category: cat.label,
+                })}
               />
             </div>
           );
