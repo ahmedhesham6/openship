@@ -362,12 +362,9 @@ function parseEnvValue(rawValue: string): string {
   if (value.startsWith('"')) {
     const end = findClosingQuote(value, '"');
     const quoted = end >= 0 ? value.slice(1, end) : value.slice(1);
-    return quoted
-      .replace(/\\n/g, "\n")
-      .replace(/\\r/g, "\r")
-      .replace(/\\t/g, "\t")
-      .replace(/\\"/g, '"')
-      .replace(/\\\\/g, "\\");
+    return quoted.replace(/\\([nrt"\\])/g, (_m, ch: string) =>
+      ch === "n" ? "\n" : ch === "r" ? "\r" : ch === "t" ? "\t" : ch,
+    );
   }
 
   if (value.startsWith("'")) {

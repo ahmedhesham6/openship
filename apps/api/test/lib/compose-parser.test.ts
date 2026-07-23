@@ -169,6 +169,14 @@ BAZ=qux
     expect(parseComposeEnvFile(`MSG='line1\\nline2'`)).toEqual({ MSG: "line1\\nline2" });
   });
 
+  it("treats an escaped backslash as a literal `\\` before the next char", () => {
+    expect(parseComposeEnvFile(String.raw`WINPATH="C:\\nginx\\conf"`)).toEqual({
+      WINPATH: "C:\\nginx\\conf",
+    });
+    expect(parseComposeEnvFile(String.raw`X="a\\nb"`)).toEqual({ X: "a\\nb" });
+    expect(parseComposeEnvFile(String.raw`Y="a\nb"`)).toEqual({ Y: "a\nb" });
+  });
+
   it("accepts 'export' prefix (POSIX shell convention)", () => {
     expect(parseComposeEnvFile(`export FOO=bar\nexport BAZ="qux qux"`)).toEqual({
       FOO: "bar",
