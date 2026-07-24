@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "openship",
@@ -16,7 +17,7 @@
     },
     "apps/api": {
       "name": "@repo/api",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "dependencies": {
         "@better-auth/drizzle-adapter": "^1.5.4",
         "@hono/node-server": "^1.19.11",
@@ -49,7 +50,7 @@
     },
     "apps/cli": {
       "name": "openship",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "bin": {
         "openship": "./dist/index.js",
       },
@@ -112,7 +113,7 @@
     },
     "apps/desktop": {
       "name": "@repo/desktop",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "dependencies": {
         "@repo/core": "workspace:*",
         "@repo/onboarding": "workspace:*",
@@ -132,11 +133,11 @@
     },
     "apps/email": {
       "name": "@repo/email",
-      "version": "0.2.2",
+      "version": "0.3.0",
     },
     "apps/web": {
       "name": "@repo/web",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "dependencies": {
         "@repo/core": "workspace:*",
         "@repo/ui": "workspace:*",
@@ -148,6 +149,7 @@
         "lucide-react": "0.474.0",
         "motion": "12.4.7",
         "next": "^16.1.6",
+        "nodemailer": "^6.9.16",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
         "react-wrap-balancer": "^1.1.1",
@@ -3038,6 +3040,8 @@
     "@repo/ui/@types/node": ["@types/node@25.3.5", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-oX8xrhvpiyRCQkG1MFchB09f+cXftgIXb3a7UUa4Y3wpmZPw5tyZGTLWhlESOLq1Rq6oDlc8npVU2/9xiCuXMA=="],
 
     "@repo/web/lucide-react": ["lucide-react@0.474.0", "", { "peerDependencies": { "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-CmghgHkh0OJNmxGKWc0qfPJCYHASPMVSyGY8fj3xgk4v84ItqDg64JNKFZn5hC6E0vHi6gxnbCgwhyVB09wQtA=="],
+
+    "@repo/web/nodemailer": ["nodemailer@6.10.1", "", {}, "sha512-Z+iLaBGVaSjbIzQ4pX6XV41HrooLsQ10ZWPUehGmuantvzWoDVBnmsdUcOIDM1t+yPor5pDhVlDESgOMEGxhHA=="],
 
     "@repo/web/tailwind-merge": ["tailwind-merge@3.0.2", "", {}, "sha512-l7z+OYZ7mu3DTqrL88RiKrKIqO3NcpEO8V/Od04bNpvk0kiIFndGEoqfuzvj4yuhRkHKjRkII2z+KS2HfPcSxw=="],
 
