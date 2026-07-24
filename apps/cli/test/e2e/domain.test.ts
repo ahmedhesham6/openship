@@ -92,3 +92,27 @@ describe("openship domain add", () => {
     expect(JSON.parse(out)).toEqual({ domain: ADDED.data, records: ADDED.records });
   });
 });
+
+// ─── preview (no changes saved) ──────────────────────────────────────────────
+
+describe("openship domain preview", () => {
+  const PREVIEW = { data: { mode: "cloud", records: [{ type: "TXT", host: "_openship", value: "verify=abc" }] } };
+
+  it("POSTs the hostname to /domains/preview and prints the record table", async () => {
+    fetchStub = stubFetch(() => ({ json: PREVIEW }));
+    const { out, err, code } = await runCommand(domainCommand, ["preview", "app.example.com"]);
+    expect(code).toBe(0);
+    expect(fetchStub.calls[0].method).toBe("POST");
+    expect(fetchStub.calls[0].url).toBe(`${API}/domains/preview`);
+    expect(fetchStub.calls[0].body).toEqual({ hostname: "app.example.com" });
+    expect(err).toContain("DNS mode: cloud");
+    expect(out).toContain("verify=abc");
+  });
+
+  it("emits the records result as JSON in json mode", async () => {
+    setJsonMode(true);
+    fetchStub = stubFetch(() => ({ json: PREVIEW }));
+    const { out } = await runCommand(domainCommand, ["preview", "app.example.com"]);
+    expect(JSON.parse(out)).toEqual(PREVIEW.data);
+  });
+});
