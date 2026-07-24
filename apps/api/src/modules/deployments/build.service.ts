@@ -1119,6 +1119,17 @@ export async function redeployBuildSession(
   opts?: { useExistingCommit?: boolean; trigger?: string; preDeployBackup?: boolean },
 ) {
   const { dep: oldDep, project } = await loadDeployment(deploymentId);
+  // The Openship control plane updates itself via the CLI — never a redeploy.
+  // The apply-update endpoint (updates.service) reaches redeploy directly, and
+  // the self-app is a repo-less release project so the GitHub gate below
+  // short-circuits without catching it — guard explicitly here too, matching
+  // triggerDeployment. Otherwise "Apply update" no-ops on the adopt deployment
+  // and fakes success while the running control plane is untouched.
+  if (project.appTemplateId === "openship") {
+    throw new ForbiddenError(
+      "The Openship control plane updates itself — run the CLI upgrade, not a redeploy.",
+    );
+  }
   // GitHub access gate (default-deny): a member can redeploy a
   // GitHub-backed project only when granted this repo.
   await assertGitHubRepoAccess(ctx, {

@@ -29,6 +29,7 @@
     "cron-parser": "^4.9.0",
     "hono": "^4.12.5",
     "ioredis": "^5.10.0",
+    "ipaddr.js": "^2.4.0",
     "maxmind": "^5.0.6",
     "nodemailer": "^9.0.1",
     "pino": "^10.3.1",
