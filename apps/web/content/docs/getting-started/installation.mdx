@@ -164,12 +164,12 @@ Prefer to skip the prompts? `openship up` starts the same background service dir
 openship up
 ```
 
-<Callout title="Compose vs bare — `openship up` picks for you" type="info">
-On **Linux with Docker**, `openship up` installs the container stack (Postgres, Redis, API, dashboard, and the
-OpenResty edge on :80/:443 — the same stack as the Docker Compose tab above), which can **host your deployed
-apps on this box** with domains and TLS. Everywhere else (macOS, Windows, or Linux without Docker) it installs
-a single lightweight process with a built-in database — an always-on control plane that deploys apps out to a
-server or the cloud. Force either with `openship up --compose` or `openship up --bare`.
+<Callout title="Compose vs bare — picked automatically" type="info">
+However you start it, on **Linux with Docker** Openship installs the container stack (Postgres, Redis, API,
+dashboard, and the OpenResty edge on :80/:443 — the same stack as the Docker Compose tab above), which can
+**host your deployed apps on this box** with domains and TLS. Everywhere else (macOS, Windows, or Linux without
+Docker) it installs a single lightweight process with a built-in database — an always-on control plane that
+deploys apps out to a server or the cloud. To force the choice, run `openship up --compose` or `openship up --bare`.
 </Callout>
 
 Either way, Openship runs as a **background service that starts on boot and restarts itself if it crashes** —

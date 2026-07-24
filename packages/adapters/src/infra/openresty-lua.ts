@@ -313,6 +313,28 @@ server {
 }
 `;
 
+/**
+ * Loopback port certbot's `--standalone` authenticator listens on during
+ * issuance. The edge proxies `/.well-known/acme-challenge/` to it, so HTTP-01
+ * works with ZERO downtime — no port-80 fight with the edge, no webroot
+ * dependency, no DNS-01. Fixed high port, outside the usual app/user range.
+ * Certbot binds it only transiently; it just needs to be reachable from the
+ * edge on loopback. Identical for bare (host netns) and docker-edge (container
+ * netns), since certbot runs on the same executor/netns as the edge.
+ */
+export const ACME_HTTP01_PORT = 49180;
+
+/**
+ * The `/.well-known/acme-challenge/` location block — proxies the HTTP-01
+ * challenge to certbot's transient standalone server. SHARED by the default
+ * catch-all here and the per-vhost templates in nginx.ts so all three agree.
+ */
+export const ACME_CHALLENGE_LOCATION = `\
+    location /.well-known/acme-challenge/ {
+        proxy_pass http://127.0.0.1:${ACME_HTTP01_PORT};
+        proxy_set_header Host $host;
+    }`;
+
 const DEFAULT_BLOCK = `\
 # Openship default catch-all - prevents the stock OpenResty welcome page
 # Auto-generated - do not edit manually
@@ -320,9 +342,7 @@ server {
     listen 80 default_server;
     server_name _;
 
-    location /.well-known/acme-challenge/ {
-        root /var/www/acme;
-    }
+${ACME_CHALLENGE_LOCATION}
 
     location / {
         return 404;

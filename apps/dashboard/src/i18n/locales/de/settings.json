@@ -477,7 +477,8 @@
     "orgDefaults": {
       "title": "Organisationsstandards",
       "description": "Standardwerte, die angewendet werden, wenn ein neues Mitglied dieser Organisation beitritt. Mitglieder können sie pro Kanal überschreiben.",
-      "notifyAria": "Bei {category} benachrichtigen"
+      "notifyAria": "Bei {category} benachrichtigen",
+      "nChannels": "{n} Kanäle"
     }
   },
   "audit": {

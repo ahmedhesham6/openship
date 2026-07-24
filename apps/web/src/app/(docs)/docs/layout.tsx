@@ -22,9 +22,11 @@ export default function DocsRootLayout({ children }: { children: ReactNode }) {
           mode: "top",
           title: (
             <>
-              <span
-                className="inline-block h-[22px] w-[22px] shrink-0 rounded-full border-[2.5px] border-current"
-                aria-hidden
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/apple-touch-icon.png"
+                alt=""
+                className="inline-block h-[22px] w-[22px] shrink-0 rounded-md object-cover"
               />
               <span className="font-semibold">Openship</span>
             </>

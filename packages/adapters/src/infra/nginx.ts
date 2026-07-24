@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 
 import type { CommandExecutor, ManualCert, RouteConfig, SslResult } from "../types";
 import type { RoutingProvider, SslProvider } from "./types";
-import { LUA_LOGGER_PATH, RULES_GUARD_PATH, luaSourceAvailable, buildReloadCommand, detectOpenRestyPaths, type OpenRestyPaths } from "./openresty-lua";
+import { LUA_LOGGER_PATH, RULES_GUARD_PATH, luaSourceAvailable, buildReloadCommand, detectOpenRestyPaths, ACME_HTTP01_PORT, ACME_CHALLENGE_LOCATION, type OpenRestyPaths } from "./openresty-lua";
 import { safeErrorMessage, sanitizeProxySettings, PROXY_GZIP_TYPES, type ProxySettings } from "@repo/core";
 import { sq } from "../system/local-shell";
 
@@ -370,6 +370,29 @@ export class NginxProvider implements RoutingProvider, SslProvider {
     }
   }
 
+  /**
+   * Run certbot, optionally STREAMING its output line-by-line to `onLog` (the
+   * live verify modal). Falls back to buffered `_exec` when no callback / no
+   * executor. `streamExec` doesn't reject on a non-zero exit — it returns the
+   * code — so mirror `_exec`'s throw-with-output so `summarizeCertbotFailure`
+   * still sees the real cause.
+   */
+  private async _execCertbot(args: string[], onLog?: (line: string) => void): Promise<string> {
+    if (!onLog || !this.executor) {
+      const out = await this._exec("certbot", args);
+      if (out) onLog?.(out);
+      return out;
+    }
+    const full = `certbot ${args.map(sq).join(" ")}`;
+    let output = "";
+    const { code } = await this.executor.streamExec(full, (log) => {
+      output += log.message;
+      onLog(log.message);
+    });
+    if (code !== 0) throw new Error(output.trim() || `certbot exited ${code}`);
+    return output;
+  }
+
   private async _captureFile(path: string): Promise<FileSnapshot> {
     if (!(await this._exists(path))) {
       return { exists: false };
@@ -466,9 +489,7 @@ server {
 
 ${luaLogOnly}
 
-    location /.well-known/acme-challenge/ {
-        root /var/www/acme;
-    }
+${ACME_CHALLENGE_LOCATION}
 
     location / {
         return 301 https://$server_name$request_uri;
@@ -499,9 +520,7 @@ server {
 
 ${luaProxy}
 ${serverHeaders}${proxyOpts}
-    location /.well-known/acme-challenge/ {
-        root /var/www/acme;
-    }
+${ACME_CHALLENGE_LOCATION}
 ${webhookLocation}${extraLocations}
     location / {
         ${locationBody}
@@ -564,7 +583,7 @@ ${webhookLocation}${extraLocations}
    * a webroot failure becomes a "deploy continues on HTTP, retry from
    * Domains tab" warning instead of a deploy abort.
    */
-  async provisionCert(domain: string): Promise<SslResult> {
+  async provisionCert(domain: string, opts?: { onLog?: (line: string) => void }): Promise<SslResult> {
     assertValidDomain(domain);
 
     // Check if cert already exists
@@ -580,11 +599,27 @@ ${webhookLocation}${extraLocations}
       ? ["--email", this.acmeEmail as string]
       : ["--register-unsafely-without-email"];
 
+    let certonlyOut = "";
     try {
-      await this._exec("certbot", [
-        "certonly", "--webroot", "-w", "/var/www/acme", "-d", domain,
+      // ACME via certbot's STANDALONE authenticator on a loopback alt-port; the
+      // edge proxies /.well-known/acme-challenge/ → 127.0.0.1:<port> (see
+      // ACME_CHALLENGE_LOCATION). Zero downtime — no port-80 fight with the edge,
+      // no webroot dependency, no DNS-01. Works bare (host netns) and docker-edge
+      // (container netns) alike, since certbot runs on the same executor as the
+      // edge it's proxied through.
+      //
+      // `--cert-name <domain>` PINS the lineage to the bare domain name. Without
+      // it, certbot appends `-0001`/`-0002` when a stale renewal config for the
+      // domain lingers (a prior teardown/migration removed the live symlink but
+      // left /etc/letsencrypt/renewal), so the cert lands at `<domain>-0001` while
+      // certsExist/readCertInfo only ever look at `<domain>` → an eternal
+      // "missing", and a re-run just prints "not due for renewal" (exit 0). Pinning
+      // the name makes the on-disk path deterministic and self-heals that state.
+      certonlyOut = await this._execCertbot([
+        "certonly", "--standalone", "--http-01-port", String(ACME_HTTP01_PORT),
+        "--cert-name", domain, "-d", domain,
         ...emailArgs, "--agree-tos", "--non-interactive",
-      ]);
+      ], opts?.onLog);
     } catch (err) {
       // Replace certbot's opaque opener with the real, actionable cause.
       throw new Error(summarizeCertbotFailure(safeErrorMessage(err), domain));
@@ -600,7 +635,7 @@ ${webhookLocation}${extraLocations}
       const state = await this._readFile(this.routeStatePath(slug));
       const saved = JSON.parse(state) as RouteConfig;
       await this.registerRoute({ ...saved, domain, tls: true });
-      return this.readCertInfo(domain);
+      return this.ensureIssued(domain, certonlyOut);
     } catch {
       // No sidecar (legacy route or unreadable) - fall back to scraping the conf.
     }
@@ -610,19 +645,37 @@ ${webhookLocation}${extraLocations}
       const targetMatch = existing.match(/proxy_pass\s+([^;]+);/);
       if (targetMatch) {
         await this.registerRoute({ domain, targetUrl: targetMatch[1], tls: true });
-        return this.readCertInfo(domain);
+        return this.ensureIssued(domain, certonlyOut);
       }
 
       const rootMatch = existing.match(/root\s+([^;]+);/);
       if (rootMatch) {
         await this.registerRoute({ domain, staticRoot: rootMatch[1], tls: true });
-        return this.readCertInfo(domain);
+        return this.ensureIssued(domain, certonlyOut);
       }
     } catch {
       // Config doesn't exist - cert provisioned but no route yet
     }
 
-    return this.readCertInfo(domain);
+    return this.ensureIssued(domain, certonlyOut);
+  }
+
+  /**
+   * After a certbot run that DIDN'T throw, confirm a usable cert actually landed
+   * at the expected path. certbot can exit 0 while producing nothing readable
+   * there (a lineage written elsewhere, "not due for renewal", 0 domains
+   * authenticated) — a silent `{missing}` hides why. Surface certbot's real
+   * output so the operator sees the actual reason instead of a generic message.
+   */
+  private async ensureIssued(domain: string, certbotOutput: string): Promise<SslResult> {
+    const result = await this.readCertInfo(domain);
+    if (result.verified) return result;
+    const tail = certbotOutput.trim().slice(-1200);
+    throw new Error(
+      summarizeCertbotFailure(certbotOutput, domain) +
+        (tail ? `\n\ncertbot exited without an error but no readable certificate is at ` +
+          `${join(this.certDir, domain)}. certbot said:\n${tail}` : ""),
+    );
   }
 
   /**

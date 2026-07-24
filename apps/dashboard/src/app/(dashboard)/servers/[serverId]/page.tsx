@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import {
   ArrowLeft,
@@ -122,6 +123,17 @@ export default function ServerDetailPage({
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
     },
     [searchParams, router, pathname],
+  );
+  // Real URL for each tab (`?tab=`, other params preserved) so the tabs are
+  // proper links — cmd/ctrl/middle-click opens the tab in a new browser tab,
+  // and the link is copyable. Plain clicks still switch client-side via changeTab.
+  const tabHref = useCallback(
+    (key: Tab) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      params.set("tab", key);
+      return `${pathname}?${params.toString()}`;
+    },
+    [searchParams, pathname],
   );
   const [showMenu, setShowMenu] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
@@ -679,9 +691,17 @@ export default function ServerDetailPage({
             (including the single-column Services tab). */}
         <div className="flex items-center gap-1 mb-6 border-b border-border/50 overflow-x-auto">
           {TABS.filter((tab) => !tab.desktopOnly || isDesktop).map(({ key, icon: Icon }) => (
-            <button
+            <Link
               key={key}
-              onClick={() => changeTab(key)}
+              href={tabHref(key)}
+              scroll={false}
+              onClick={(e) => {
+                // Let the browser handle modified clicks (new tab / new window);
+                // intercept a plain click for an instant client-side switch.
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                changeTab(key);
+              }}
               className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors relative shrink-0 ${
                 activeTab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground/70"
               }`}
@@ -691,7 +711,7 @@ export default function ServerDetailPage({
               {activeTab === key && (
                 <span className="absolute bottom-0 start-0 end-0 h-0.5 bg-primary rounded-full" />
               )}
-            </button>
+            </Link>
           ))}
         </div>
 

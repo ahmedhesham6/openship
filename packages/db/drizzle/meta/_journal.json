@@ -428,6 +428,13 @@
       "when": 1784881697507,
       "tag": "0060_add_route_strategy_host_port",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1784881797507,
+      "tag": "0061_notification_default_multi_kind",
+      "breakpoints": true
     }
   ]
 }

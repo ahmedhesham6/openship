@@ -9,8 +9,9 @@ your deployed apps. Start the server, keep it up to date, and check that it's he
 <Callout title="Two different things called “install”" type="info">
 There are two ways to run Openship, and they don't overlap:
 
-- **`openship up`** runs the self-hosted **server** (API + dashboard) from the globally-installed CLI. This is
-  what most self-hosters want. `openship update` keeps it current.
+- **`openship`** (no arguments) is how most self-hosters run the **server** (API + dashboard) — a guided setup
+  that creates your admin and installs it as a service. `openship up` is the same install *without* the prompts
+  (headless / CI); `openship update` keeps either current.
 - **`openship install`** downloads the desktop **app** (a `.dmg` / `.AppImage` / `.zip`) — a packaged,
   double-click version for a single machine. It's a separate artifact from the CLI.
 </Callout>

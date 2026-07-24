@@ -36,8 +36,9 @@ type Phase = "running" | "completed" | "failed" | "error";
 export interface SystemPrepareOptions {
   /** POST SSE endpoint (relative to the API base) that runs the flow. */
   streamUrl: string;
-  /** POST endpoint answered with `{ sessionId, action }` for a prompt. */
-  respondUrl: string;
+  /** POST endpoint answered with `{ sessionId, action }` for a prompt. Omit for
+   *  flows that never prompt (e.g. verify) — the modal is pure log + result. */
+  respondUrl?: string;
   /** Modal heading. */
   title?: string;
   /** Copy overrides for the non-prompt phases. */
@@ -59,13 +60,12 @@ function PrepareStreamContent({
   const [phase, setPhase] = useState<Phase>("running");
   const [error, setError] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
-  const startedRef = useRef(false);
 
   const respond = useCallback(
     async (action: string) => {
       setPrompt(null);
       const sid = sessionIdRef.current;
-      if (!sid) return;
+      if (!sid || !opts.respondUrl) return;
       try {
         await fetch(`${getApiBaseUrl()}${opts.respondUrl}`, {
           method: "POST",
@@ -81,8 +81,12 @@ function PrepareStreamContent({
   );
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+    // NO "started" ref-guard here: combined with the abort-on-cleanup below it
+    // deadlocks under React StrictMode (dev) — the first run's fetch is aborted
+    // by the immediate cleanup, then the second run is skipped by the guard, so
+    // NO fetch ever resolves and the modal hangs on "Connecting…" (never even
+    // showing a 404). The AbortController alone is StrictMode-safe: the first
+    // run aborts, the second run fetches fresh.
     const controller = new AbortController();
     (async () => {
       let buffer = "";
@@ -107,6 +111,7 @@ function PrepareStreamContent({
         }
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
+        let sawComplete = false;
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
@@ -134,12 +139,21 @@ function PrepareStreamContent({
               setLogs((p) => [...p, { message: json.message ?? "", level: json.level ?? "info" }]);
             else if (json.type === "prompt") setPrompt(json as StreamPrompt);
             else if (json.type === "complete") {
+              sawComplete = true;
               const ok = json.status === "completed";
               setPhase(ok ? "completed" : "failed");
               setPrompt(null);
               if (ok) opts.onDone?.();
             }
           }
+        }
+        // Stream ended cleanly but WITHOUT a terminal `complete` (server closed
+        // early / crashed mid-op). Never leave the modal spinning forever — the
+        // op's real outcome is unknown, so surface that instead of a fake
+        // "in progress". (The normal path already set phase via `complete`.)
+        if (!sawComplete) {
+          setPhase((p) => (p === "running" ? "error" : p));
+          setError((e) => e ?? "The connection closed before the operation reported a result — check the domain's status.");
         }
       } catch (e) {
         if ((e as { name?: string })?.name !== "AbortError") {
@@ -262,6 +276,27 @@ export function useSystemPrepareModal() {
       return id;
     },
     [showModal, hideModal],
+  );
+}
+
+/** Self-hosted domain verify with LIVE certbot logs — streams the standalone
+ *  HTTP-01 run. No prompt (verify never asks for consent), so no respondUrl.
+ *  `openVerifyModal(domainId, { hostname, onDone })`. */
+export function useVerifyModal() {
+  const prepare = useSystemPrepareModal();
+  return useCallback(
+    (domainId: string, opts?: { hostname?: string; onDone?: () => void }): string =>
+      prepare({
+        streamUrl: `domains/${domainId}/verify/stream`,
+        title: opts?.hostname ? `Verify ${opts.hostname}` : "Verify domain",
+        labels: {
+          working: "Verifying — issuing the certificate…",
+          done: "Verified — certificate issued and SSL active.",
+          failed: "Couldn't verify — see the log above for the exact reason.",
+        },
+        onDone: opts?.onDone,
+      }),
+    [prepare],
   );
 }
 

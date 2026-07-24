@@ -112,6 +112,8 @@
     "targetLabel": "Project",
     "targetPlaceholder": "Select a project…",
     "valueLabel": "Value to inject",
+    "valuesLabel": "Values to inject",
+    "connectedN": "Wired {count} value(s) into {project} — redeploy to apply.",
     "modeInternal": "Internal (recommended)",
     "modeInternalDesc": "Reach it privately over a shared network — no public port. Same self-hosted server.",
     "modePublic": "Public",

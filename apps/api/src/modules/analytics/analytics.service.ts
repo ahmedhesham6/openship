@@ -68,6 +68,37 @@ async function fetchLiveBuckets(
   return getBucketArray(result?.buckets);
 }
 
+/**
+ * The live OpenResty tail is only the last few UNFLUSHED minutes — the DB
+ * already holds every flushed minute (the real snapshot). The tail is fetched
+ * over an SSH tunnel to the edge, which is slow/unreachable when the server is
+ * remote (desktop mode) — and letting it block times out the WHOLE overview
+ * (the "analytics request timed out, works after a huge time" symptom). Cap it
+ * hard and fall back to the DB archive; a few missing seconds of live data is a
+ * fair trade for an overview that always returns fast. Best-effort, never throws.
+ */
+const LIVE_TAIL_TIMEOUT_MS = 3500;
+
+async function fetchLiveBucketsBounded(
+  serverId: string,
+  domain: string,
+  fromMinute: number,
+  toMinute: number,
+): Promise<MgmtAnalyticsBucket[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const capped = new Promise<MgmtAnalyticsBucket[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), LIVE_TAIL_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([
+      fetchLiveBuckets(serverId, domain, fromMinute, toMinute).catch(() => []),
+      capped,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Convert a DB row to the unified bucket shape. */
 function toMgmtBucket(b: {
   minute: number;
@@ -390,7 +421,7 @@ export async function getAnalyticsOverview(
         dbBuckets.length > 0 ? Math.max(...dbBuckets.map((b) => b.minute)) : fromMinute - 1;
       const liveFrom = Math.max(lastDbMinute + 1, fromMinute);
       const liveBuckets =
-        liveFrom <= toMinute ? await fetchLiveBuckets(serverId, domain, liveFrom, toMinute) : [];
+        liveFrom <= toMinute ? await fetchLiveBucketsBounded(serverId, domain, liveFrom, toMinute) : [];
       return [...dbBuckets.map(toMgmtBucket), ...liveBuckets];
     }),
   );

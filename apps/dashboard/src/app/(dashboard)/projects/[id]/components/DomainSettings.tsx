@@ -31,7 +31,7 @@ import { usePlatform } from "@/context/PlatformContext";
 import { resolveServiceHostnameLabel } from "@repo/core";
 import PublicEndpointsCard from "@/components/routing/PublicEndpointsCard";
 import { RoutingSettingsCard } from "@/components/routing/RoutingSettingsCard";
-import { useEdgeModal } from "@/hooks/useSystemPrepareModal";
+import { useEdgeModal, useVerifyModal } from "@/hooks/useSystemPrepareModal";
 import DropdownMenu, { type MenuAction } from "@/components/ui/DropdownMenu";
 import {
   createPublicEndpoint,
@@ -234,6 +234,7 @@ export const DomainSettings = () => {
   const router = useRouter();
   const { baseDomain, selfHosted } = usePlatform();
   const openEdgeModal = useEdgeModal();
+  const openVerifyModal = useVerifyModal();
 
   // Live edge health for the server (read-only probe). Drives the button state:
   // "Edge ready" when OpenResty already owns 80/443, else "Set up edge".
@@ -731,6 +732,24 @@ export const DomainSettings = () => {
       );
     } finally {
       setVerifyingDomainId(null);
+    }
+  };
+
+  // Verify entry point. Self-hosted → the LIVE-LOG modal (streams certbot's
+  // standalone HTTP-01 run), so the operator sees exactly what happened. Cloud
+  // stays on the request/response path (Oblien CNAME check, no certbot to stream,
+  // and it needs the cloud proxy).
+  const startVerify = (domainId: string, hostname: string) => {
+    if (selfHosted) {
+      openVerifyModal(domainId, {
+        hostname,
+        onDone: () => {
+          setVerifyFailure((f) => (f?.domainId === domainId ? null : f));
+          invalidateProjectCaches(id);
+        },
+      });
+    } else {
+      void handleVerifyDomain(domainId, hostname);
     }
   };
 
@@ -1568,7 +1587,7 @@ export const DomainSettings = () => {
                     }
                     icon={verifyingDomainId === pendingVerifyDomain.id ? Loader2 : RefreshCw}
                     onClick={() =>
-                      void handleVerifyDomain(pendingVerifyDomain.id, pendingVerifyDomain.hostname)
+                      startVerify(pendingVerifyDomain.id, pendingVerifyDomain.hostname)
                     }
                     disabled={verifyingDomainId === pendingVerifyDomain.id}
                   />
@@ -1641,7 +1660,7 @@ export const DomainSettings = () => {
                   key={domain.id}
                   domain={domain}
                   menuActions={menuActions}
-                  onVerify={canVerify ? () => void handleVerifyDomain(domain.domainId!, domain.hostname) : undefined}
+                  onVerify={canVerify ? () => startVerify(domain.domainId!, domain.hostname) : undefined}
                   verifying={isVerifying}
                   verifyHint={verifyHintFor(domain.domainId)}
                   autoOpenRecords={!!domain.domainId && verifyFailure?.domainId === domain.domainId}
@@ -1839,7 +1858,7 @@ export const DomainSettings = () => {
                     key={summary.id}
                     domain={summary}
                     menuActions={menuActions}
-                    onVerify={canVerify ? () => void handleVerifyDomain(summary.domainId!, summary.hostname) : undefined}
+                    onVerify={canVerify ? () => startVerify(summary.domainId!, summary.hostname) : undefined}
                     verifying={isVerifying}
                     verifyHint={verifyHintFor(summary.domainId)}
                     autoOpenRecords={!!summary.domainId && verifyFailure?.domainId === summary.domainId}

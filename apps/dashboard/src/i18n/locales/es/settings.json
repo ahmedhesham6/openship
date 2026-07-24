@@ -477,7 +477,8 @@
     "orgDefaults": {
       "title": "Valores predeterminados de la organización",
       "description": "Valores predeterminados aplicados cuando un nuevo miembro se une a esta organización. Los miembros pueden anularlos por canal.",
-      "notifyAria": "Notificar en {category}"
+      "notifyAria": "Notificar en {category}",
+      "nChannels": "{n} canales"
     }
   },
   "audit": {

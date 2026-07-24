@@ -20,6 +20,7 @@ import {
   recoverInterruptedTakeover,
   COMPONENT_INSTALLERS,
   type PromptUserFn,
+  type CommandExecutor,
 } from "@repo/adapters";
 import { getRequestContext } from "../../lib/request-context";
 import { permission } from "../../lib/permission";
@@ -37,6 +38,34 @@ import {
   finishEdgeConsentSession,
   subscribeEdgeConsentSession,
 } from "./edge-consent-session";
+
+/**
+ * Run `fn` with an executor that reaches the box the edge lives on. The
+ * auto-registered "This Server" (server-host mode) is `isLocal` with NO sshHost,
+ * so `sshManager` can't connect to it — that's what made "Preparing the server's
+ * edge…" hang forever. Resolve `createHostExecutor()` (the local host — SSH-to-
+ * host when the API is containerized) for it, and the pooled SSH executor for a
+ * real remote server. Works identically for a bare edge and the docker edge.
+ */
+async function withEdgeExecutor<T>(
+  serverId: string,
+  organizationId: string,
+  fn: (exec: CommandExecutor) => Promise<T>,
+): Promise<T> {
+  const server = await repos.server.getInOrganization(serverId, organizationId).catch(() => null);
+  if (server?.isLocal) {
+    const { createHostExecutor } = await import("@repo/adapters");
+    return fn(createHostExecutor());
+  }
+  return sshManager.withExecutor(serverId, fn);
+}
+
+/** True when the server is the auto-registered local host (reachable via the
+ *  host executor, not SSH — so no `probeReachable` dial). */
+async function isLocalHostServer(serverId: string, organizationId: string): Promise<boolean> {
+  const server = await repos.server.getInOrganization(serverId, organizationId).catch(() => null);
+  return Boolean(server?.isLocal);
+}
 
 /** Resolve the server a project's active deployment runs on (self-hosted only). */
 export async function resolveProjectServer(
@@ -88,14 +117,19 @@ export async function edgeStatus(c: Context) {
   }
   const { serverId } = resolved;
 
-  // Fast-fail if the box is offline — don't block on a dead SSH connect.
-  const reachable = await sshManager.probeReachable(serverId).catch(() => false);
-  if (!reachable) {
-    return c.json({ ready: false, reachable: false });
+  // Fast-fail if the box is offline — but ONLY dial SSH for a real remote server.
+  // The local host-server has no sshHost (probeReachable would falsely report it
+  // offline); it's always reachable through createHostExecutor.
+  const local = await isLocalHostServer(serverId, ctx.organizationId);
+  if (!local) {
+    const reachable = await sshManager.probeReachable(serverId).catch(() => false);
+    if (!reachable) {
+      return c.json({ ready: false, reachable: false });
+    }
   }
 
   try {
-    const status = await sshManager.withExecutor(serverId, (executor) => probeEdge(executor));
+    const status = await withEdgeExecutor(serverId, ctx.organizationId, (executor) => probeEdge(executor));
     return c.json({
       ready: status.classification === "ours",
       reachable: true,
@@ -157,7 +191,7 @@ export async function ensureEdgeStream(c: Context) {
     try {
       appendEdgeLog(session.id, "Checking the server's edge (ports 80/443)…");
       appendEdgeLog(session.id, "Connecting to the server…");
-      await sshManager.withExecutor(serverId, async (executor) => {
+      await withEdgeExecutor(serverId, ctx.organizationId, async (executor) => {
         // No extra probe here: the installer (`ensureEdgeClear` inside
         // `installOpenResty`) detects the edge state itself and raises the
         // takeover consent, and `apt` output streams live via `onLog` — so the

@@ -50,7 +50,9 @@ export interface NotificationDefault {
   organizationId: string;
   category: string;
   defaultEnabled: boolean;
-  defaultChannelKind: ChannelKind;
+  /** Channel kinds a new member is auto-subscribed on — one event can fan out to
+   *  several (e.g. ["email","slack"]). */
+  defaultChannelKinds: ChannelKind[];
   createdAt: string;
   updatedAt: string;
 }
@@ -123,7 +125,7 @@ export const notificationsApi = {
   upsertDefault: (data: {
     category: string;
     defaultEnabled: boolean;
-    defaultChannelKind: ChannelKind;
+    defaultChannelKinds: ChannelKind[];
   }) => api.put<{ default: NotificationDefault }>(endpoints.notifications.defaults, data),
 
   // ── Deliveries (in-app inbox)

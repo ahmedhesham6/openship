@@ -156,10 +156,15 @@ async function resolveOrgServer(
  * can never drift (a drift caused the self-hosted→cloud-preflight 403).
  */
 export function resolveEffectiveTarget(base: Platform["target"], snapshot: DeploymentMeta): DeployTarget {
+  // AUTO-DETECT, don't hardcode per host platform: a deployment PINNED to a
+  // specific server always routes over SSH to that server — whether the host is
+  // a self-hosted box OR the DESKTOP app operating a remote server. Only the SaaS
+  // (base "cloud") reaches its workloads via the cloud API instead of SSH. This
+  // is what makes a desktop→remote-server deploy's edge/SSL run on the SERVER
+  // (over SSH), not silently fall back to the laptop's noop provider.
+  if (base !== "cloud" && snapshot.serverId) return "server";
   if (base === "desktop") return snapshot.deployTarget ?? "cloud";
   if (base === "selfhosted") {
-    // Explicit server ID → always SSH
-    if (snapshot.serverId) return "server";
     // UI chose "server" target but serverId may be missing → still route to SSH
     if (snapshot.deployTarget === "server") return "server";
     // Local-orchestrated cloud deploy: build on THIS host, upload the output to

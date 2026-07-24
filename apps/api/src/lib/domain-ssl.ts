@@ -2,6 +2,7 @@ import type { Project } from "@repo/db";
 import type { ManualCert, SslProvider, SslResult } from "@repo/adapters";
 import { ForbiddenError, NotFoundError } from "@repo/core";
 import { repos } from "@repo/db";
+import { env } from "../config/env";
 import { platform } from "./controller-helpers";
 import { resolveDeploymentPlatform, type DeploymentMeta } from "./deployment-runtime";
 
@@ -96,15 +97,38 @@ async function resolveSslProvider(project: Project): Promise<SslProvider> {
   if (depId) {
     const dep = await repos.deployment.findById(depId);
     if (dep) {
+      const meta = (dep.meta ?? {}) as DeploymentMeta;
+      try {
+        const resolved = await resolveDeploymentPlatform(meta, { organizationId: dep.organizationId });
+        return resolved.platform.ssl;
+      } catch {
+        // Deploy target unresolvable — fall through to the host-anchored fallback.
+      }
+    }
+  }
+
+  // Fallback anchor. `platform().ssl` is the API's OWN context — for a
+  // containerized API that's the API container (no edge/OpenResty there) or a
+  // DockerEdgeExecutor for a non-existent `openship-edge`, so certbot's HTTP-01
+  // never resolves and issuance/verify silently fails. Resolve the self-hosted
+  // instance's LOCAL host-server instead (createHostExecutor → the bare host's
+  // OpenResty + /etc/letsencrypt), which is where the edge actually lives.
+  //
+  // NOT in desktop mode: there the "local host" is the user's LAPTOP, not the
+  // remote server whose edge serves the domain — a project's edge always lives
+  // on its deployment server (resolved above via serverId → SSH). The primary
+  // path handles that; this local anchor is only for a server-host install.
+  if (!env.CLOUD_MODE && env.DEPLOY_MODE !== "desktop") {
+    const local = await repos.server.findLocal(project.organizationId).catch(() => null);
+    if (local) {
       try {
         const resolved = await resolveDeploymentPlatform(
-          (dep.meta ?? {}) as DeploymentMeta,
-          { organizationId: dep.organizationId },
+          { serverId: local.id } as DeploymentMeta,
+          { organizationId: project.organizationId },
         );
         return resolved.platform.ssl;
       } catch {
-        // Deploy target unresolvable/unreachable — fall back to the global
-        // platform so a single-box install still works.
+        // Host-server unresolvable — last resort below.
       }
     }
   }
@@ -162,16 +186,16 @@ export async function manageDomainSsl(
  * ACME-as-verification for a self-hosted custom domain: obtain the cert for a
  * NOT-YET-VERIFIED domain. A successful issuance IS the proof that the hostname
  * resolves to this box and :80 is reachable — and it holds behind a CDN:
- * Cloudflare forwards the HTTP-01 challenge (served by OpenResty's default
- * server from /var/www/acme) to origin. That's why self-hosted verify drives
- * this instead of digging DNS, which a proxy in front would answer with the
- * CDN's own IP. Returns the SslResult ({verified} on success); propagates the
- * summarized certbot failure so the caller can surface an actionable "not yet"
- * message. The cert result is persisted on the way out, same as manageDomainSsl.
+ * Cloudflare forwards the HTTP-01 challenge (proxied by the edge to certbot's
+ * standalone server) to origin. That's why self-hosted verify drives this
+ * instead of digging DNS, which a proxy in front would answer with the CDN's own
+ * IP. `onLog` streams certbot's output live to the verify modal. Returns the
+ * SslResult ({verified} on success); propagates the summarized certbot failure
+ * so the caller can surface an actionable "not yet" message. Persisted on exit.
  */
 export async function provisionDomainCertForVerify(
   hostname: string,
-  opts: { projectId?: string } = {},
+  opts: { projectId?: string; onLog?: (line: string) => void } = {},
 ): Promise<SslResult> {
   const { domainRecord, project } = await resolveAuthorizedDomain(hostname, {
     action: "provision",
@@ -179,7 +203,7 @@ export async function provisionDomainCertForVerify(
     allowUnverified: true,
   });
   const ssl = await resolveSslProvider(project);
-  const result = await ssl.provisionCert(domainRecord.hostname);
+  const result = await ssl.provisionCert(domainRecord.hostname, { onLog: opts.onLog });
   await persistSslResult(domainRecord.id, domainRecord.sslStatus, result);
   return result;
 }

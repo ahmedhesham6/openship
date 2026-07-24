@@ -547,7 +547,8 @@
     "orgDefaults": {
       "title": "Organizasyon varsayılanları",
       "description": "Bu organizasyona yeni bir üye katıldığında uygulanan varsayılanlar. Üyeler kanal bazında değiştirebilir.",
-      "notifyAria": "{category} bildirimini aç"
+      "notifyAria": "{category} bildirimini aç",
+      "nChannels": "{n} kanal"
     }
   },
   "audit": {

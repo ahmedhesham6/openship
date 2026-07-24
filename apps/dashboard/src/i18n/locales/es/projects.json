@@ -293,5 +293,30 @@
     "fixStep1": "Abre la pestaña Servicios.",
     "fixStep2": "Elige el servicio que debe ser público.",
     "fixStep3": "Habilita la exposición del dominio y elige el puerto público."
+  },
+  "connections": {
+    "useInProject": "Usar en un proyecto",
+    "title": "Usar en un proyecto",
+    "subtitle": "Conecta esta base de datos a otro proyecto como una conexión lista.",
+    "targetLabel": "Proyecto",
+    "targetPlaceholder": "Selecciona un proyecto…",
+    "valueLabel": "Valor para inyectar",
+    "valuesLabel": "Valores para inyectar",
+    "connectedN": "Se conectaron {count} valor(es) a {project}: vuelve a desplegar para aplicar.",
+    "modeInternal": "Interno (recomendado)",
+    "modeInternalDesc": "Accede de forma privada por una red compartida, sin puerto público. Mismo servidor autoalojado.",
+    "modePublic": "Público",
+    "modePublicDesc": "Usa el host:port publicado. Funciona en cualquier lugar; requiere el puerto de la base de datos abierto.",
+    "envKeyLabel": "Variable de entorno",
+    "redeployHint": "Se aplica en el próximo despliegue del destino.",
+    "cancel": "Cancelar",
+    "connect": "Conectar",
+    "connected": "Conectado: vuelve a desplegar el destino para aplicar.",
+    "failed": "No se pudo conectar el servicio.",
+    "cardTitle": "Servicios conectados",
+    "removed": "Conexión eliminada: vuelve a desplegar para aplicar.",
+    "remove": "Eliminar",
+    "modeInternalShort": "Interno",
+    "modePublicShort": "Público"
   }
 }

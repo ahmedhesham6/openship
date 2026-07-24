@@ -79,13 +79,39 @@ export function sq(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/** Our OpenResty owns the edge iff our Lua scripts are deployed. */
+/**
+ * The edge we ship as a container: compose service `edge`, published image
+ * `…/openship-edge`, default container name `openship-edge`. Recognized by name
+ * OR image so a host-networked OR bridged edge container counts as OUR edge —
+ * not a foreign proxy to take over. Matching the `openship-edge` image name is
+ * the stable signal (the container name is configurable via OPENSHIP_EDGE_CONTAINER).
+ */
+export function isOurEdgeContainer(name?: string, image?: string): boolean {
+  return /openship-edge/i.test(`${name ?? ""} ${image ?? ""}`);
+}
+
+/**
+ * Does OUR OpenResty own the edge? Two topologies:
+ *   - bare host  → our Lua scripts are deployed on the host (`test -f`).
+ *   - CONTAINER (default self-hosted) → our `openship-edge` container is running.
+ *     Its Lua lives INSIDE the container (invisible to a host `test -f`), and
+ *     with host networking it publishes no port a `--filter publish` would match,
+ *     so detect it by name — otherwise our own edge reads as a foreign proxy and
+ *     the takeover flow fires against itself (the "Another proxy holds 80/443"
+ *     stall after a migration).
+ */
 export async function isOpenshipManagedEdge(executor: CommandExecutor): Promise<boolean> {
-  const out = await tryExec(
+  const lua = await tryExec(
     executor,
     `test -f ${OPENRESTY_LUA_DIR}/site_logger.lua && echo ok`,
   );
-  return Boolean(out && out.includes("ok"));
+  if (lua && lua.includes("ok")) return true;
+
+  const edge = await tryExec(
+    executor,
+    `docker ps --filter name=openship-edge --format '{{.Names}}' 2>/dev/null | head -1`,
+  );
+  return Boolean(edge && edge.trim());
 }
 
 async function detectDockerOnPort(
@@ -143,14 +169,19 @@ async function probeEdgePort(
       .join(" "),
   );
 
-  // "Ours" means the process ACTUALLY LISTENING is our OpenResty — NOT merely a
-  // process named "nginx" while our Lua happens to sit on disk from a past run.
-  // OpenResty lives under an `openresty` prefix (e.g. /usr/local/openresty/nginx/
-  // sbin/nginx); a distro proxy is /usr/sbin/nginx. Trusting the "nginx" name here
-  // is what made a foreign nginx look managed → the takeover was silently skipped.
-  // A containerized proxy is never our host OpenResty.
+  // "Ours" has two shapes:
+  //   - OUR edge CONTAINER publishes this port (bridged `openship-edge`) — the
+  //     docker occupant IS our edge image/name.
+  //   - a HOST process is genuinely our OpenResty: the binary ACTUALLY LISTENING
+  //     resolves under an `openresty` prefix (/usr/local/openresty/nginx/sbin/
+  //     nginx), NOT a distro /usr/sbin/nginx that merely shares the "nginx"
+  //     process name while our Lua happens to sit on disk from a past run
+  //     (the hekai regression). Host networking puts our containerized edge's
+  //     OpenResty here too (no docker publish match) → `ourEdge` (the running
+  //     `openship-edge` container) gates it.
   const managedByOpenship =
-    ourEdge && !docker && (await listenerIsOurOpenResty(executor, listener));
+    isOurEdgeContainer(docker?.name, docker?.image) ||
+    (!docker && ourEdge && (await listenerIsOurOpenResty(executor, listener)));
 
   return {
     port,

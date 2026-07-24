@@ -293,5 +293,30 @@
     "fixStep1": "打开“服务”标签页。",
     "fixStep2": "选择应对外公开的服务。",
     "fixStep3": "启用域名暴露并选择公开端口。"
+  },
+  "connections": {
+    "useInProject": "在项目中使用",
+    "title": "在项目中使用",
+    "subtitle": "将此数据库作为现成连接接入另一个项目。",
+    "targetLabel": "项目",
+    "targetPlaceholder": "选择一个项目…",
+    "valueLabel": "要注入的值",
+    "valuesLabel": "要注入的值",
+    "connectedN": "已将 {count} 个值接入 {project} — 重新部署以生效。",
+    "modeInternal": "内部（推荐）",
+    "modeInternalDesc": "通过共享网络私有访问 — 无公共端口。同一自托管服务器。",
+    "modePublic": "公开",
+    "modePublicDesc": "使用已发布的 host:port。可在任何地方使用；需要开放数据库端口。",
+    "envKeyLabel": "环境变量",
+    "redeployHint": "在目标的下次部署时应用。",
+    "cancel": "取消",
+    "connect": "连接",
+    "connected": "已连接 — 重新部署目标以生效。",
+    "failed": "无法连接该服务。",
+    "cardTitle": "已连接的服务",
+    "removed": "已移除连接 — 重新部署以生效。",
+    "remove": "移除",
+    "modeInternalShort": "内部",
+    "modePublicShort": "公开"
   }
 }

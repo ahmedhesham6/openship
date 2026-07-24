@@ -30,6 +30,13 @@ import type {
   TSetServiceEnvVarsBody,
 } from "./service.schema";
 
+/** Cap how long a route update AWAITS the (SSH) edge re-register before
+ *  returning. Past this, the DB change is already saved and the edge apply
+ *  finishes in the background — so a slow REMOTE edge never hangs the modal on a
+ *  change that already took effect. Routing is best-effort; routingUnsynced
+ *  surfaces if the background apply lags. */
+const ROUTE_EDGE_APPLY_TIMEOUT_MS = 6000;
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Verify a service exists and belongs to a project in the given org */
@@ -434,17 +441,28 @@ export async function updateService(
         !project.cloudWorkspaceId && project.activeDeploymentId
           ? await repos.deployment.findById(project.activeDeploymentId)
           : null;
-      await reconcileProjectRoutes(project, { deployment: dep, registers, removes });
 
-      // Now that the HTTP route is live, adopt any cert the box ALREADY serves
-      // for a freshly-published custom domain (Openship re-migration on the same
-      // box, or a foreign proxy we're taking over) — so it comes up verified +
-      // SSL active without an ACME re-issue that would fail behind a CDN. Runs
-      // AFTER reconcile so installDomainCert re-registers the vhost with TLS on
-      // top of the base route. Best-effort — never blocks the route update.
-      for (const domainId of freshlyPublishedDomainIds) {
-        await reuseServerCertForDomain(ctx, domainId).catch(() => {});
-      }
+      // The edge re-register (+ cert reuse) runs over SSH to the serving box.
+      // When that box is REMOTE (desktop mode) the write+reload can be slow — and
+      // the service row is ALREADY saved above, with routing being best-effort
+      // ([[domains-never-fail-deploy]]). So DON'T let the SSH edge apply hang the
+      // request: bound the await and, past the cap, RETURN while it finishes in
+      // the background. Otherwise the modal spins and times out on a change that
+      // already applied (the reported "keeps loading, but it took effect").
+      const applyEdge = (async () => {
+        await reconcileProjectRoutes(project, { deployment: dep, registers, removes });
+        // AFTER reconcile so installDomainCert re-registers the vhost with TLS on
+        // top of the live HTTP route — adopt an existing cert for a freshly
+        // published custom domain (migration / takeover) instead of ACME.
+        for (const domainId of freshlyPublishedDomainIds) {
+          await reuseServerCertForDomain(ctx, domainId).catch(() => {});
+        }
+      })();
+      applyEdge.catch((err) => console.error(`[SERVICE] edge apply for ${svc.name}:`, err));
+      await Promise.race([
+        applyEdge,
+        new Promise<void>((resolve) => setTimeout(resolve, ROUTE_EDGE_APPLY_TIMEOUT_MS)),
+      ]);
     } catch (err) {
       console.error(`[SERVICE] Failed to update route for ${svc.name}:`, err);
     }

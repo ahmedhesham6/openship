@@ -293,5 +293,30 @@
     "fixStep1": "Öffne den Tab „Dienste“.",
     "fixStep2": "Wähle den Dienst, der öffentlich sein soll.",
     "fixStep3": "Aktiviere die Domain-Freigabe und wähle den öffentlichen Port."
+  },
+  "connections": {
+    "useInProject": "In einem Projekt verwenden",
+    "title": "In einem Projekt verwenden",
+    "subtitle": "Binde diese Datenbank als fertige Verbindung in ein anderes Projekt ein.",
+    "targetLabel": "Projekt",
+    "targetPlaceholder": "Projekt auswählen…",
+    "valueLabel": "Einzufügender Wert",
+    "valuesLabel": "Einzufügende Werte",
+    "connectedN": "{count} Wert(e) mit {project} verbunden – zum Anwenden neu bereitstellen.",
+    "modeInternal": "Intern (empfohlen)",
+    "modeInternalDesc": "Privat über ein gemeinsames Netzwerk erreichbar – kein öffentlicher Port. Gleicher selbstgehosteter Server.",
+    "modePublic": "Öffentlich",
+    "modePublicDesc": "Verwendet den veröffentlichten host:port. Funktioniert überall; der Datenbank-Port muss offen sein.",
+    "envKeyLabel": "Umgebungsvariable",
+    "redeployHint": "Wird beim nächsten Deploy des Ziels angewendet.",
+    "cancel": "Abbrechen",
+    "connect": "Verbinden",
+    "connected": "Verbunden – Ziel neu bereitstellen, um anzuwenden.",
+    "failed": "Dienst konnte nicht verbunden werden.",
+    "cardTitle": "Verbundene Dienste",
+    "removed": "Verbindung entfernt – neu bereitstellen, um anzuwenden.",
+    "remove": "Entfernen",
+    "modeInternalShort": "Intern",
+    "modePublicShort": "Öffentlich"
   }
 }

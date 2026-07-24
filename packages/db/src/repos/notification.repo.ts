@@ -247,7 +247,7 @@ export function createNotificationDefaultRepo(db: Database) {
       organizationId: string;
       category: string;
       defaultEnabled: boolean;
-      defaultChannelKind: ChannelKind;
+      defaultChannelKinds: ChannelKind[];
     }): Promise<NotificationDefault> {
       await db
         .insert(notificationDefault)
@@ -256,7 +256,7 @@ export function createNotificationDefaultRepo(db: Database) {
           target: [notificationDefault.organizationId, notificationDefault.category],
           set: {
             defaultEnabled: input.defaultEnabled,
-            defaultChannelKind: input.defaultChannelKind,
+            defaultChannelKinds: input.defaultChannelKinds,
             updatedAt: new Date(),
           },
         });

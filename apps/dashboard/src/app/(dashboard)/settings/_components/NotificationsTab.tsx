@@ -17,9 +17,9 @@
  *      defaults that apply when a NEW member joins this org.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Bell, Mail, Webhook, MessageSquare, MessageCircle, MessagesSquare, Smartphone, Plus, Trash2, Loader2, AlertTriangle, Send, type LucideIcon } from "lucide-react";
+import { Bell, Mail, Webhook, MessageSquare, MessageCircle, MessagesSquare, Smartphone, Plus, Trash2, Loader2, AlertTriangle, Send, Check, ChevronDown, type LucideIcon } from "lucide-react";
 import { AppLogo } from "@/components/AppLogo";
 import { PillSwitcher } from "@/components/ui/PillSwitcher";
 import { systemApi } from "@/lib/api/system";
@@ -72,6 +72,102 @@ function ChannelLogo({ kind, className = "size-4" }: { kind: ChannelKind; classN
   if (slug) return <AppLogo slug={slug} icon={CHANNEL_ICONS[kind]} className={className} />;
   const Icon = CHANNEL_ICONS[kind];
   return <Icon className={`${className} text-foreground`} strokeWidth={1.7} />;
+}
+
+/** Channel kinds selectable as org-default destinations (in_app excluded — it's
+ *  implicit, not a chosen destination). */
+const DEFAULT_KIND_CHOICES: ChannelKind[] = ["email", "webhook", "slack", "discord", "msteams"];
+
+/** Compact multi-select: pick one OR MORE channel kinds an event fans out to.
+ *  Trigger shows the selected marks + count; a checklist popover toggles kinds.
+ *  Always keeps ≥1 selected (unchecking the last is a no-op). */
+function ChannelMultiSelect({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: ChannelKind[];
+  disabled?: boolean;
+  onChange: (kinds: ChannelKind[]) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const toggle = (k: ChannelKind) => {
+    const has = value.includes(k);
+    if (has && value.length === 1) return; // keep at least one destination
+    onChange(has ? value.filter((x) => x !== k) : [...value, k]);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="flex min-w-[9.5rem] items-center justify-between gap-2 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-muted/30 disabled:opacity-50"
+      >
+        <span className="flex items-center gap-1.5">
+          <span className="flex -space-x-1">
+            {value.slice(0, 3).map((k) => (
+              <span
+                key={k}
+                className="grid size-5 place-items-center rounded-full bg-muted ring-1 ring-background"
+              >
+                <ChannelLogo kind={k} className="size-3" />
+              </span>
+            ))}
+          </span>
+          <span className="text-muted-foreground">
+            {interpolate(t.settings.notifications.orgDefaults.nChannels, { n: String(value.length) })}
+          </span>
+        </span>
+        <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+      </button>
+      {open && (
+        // Frosted-glass surface (`bg-popover/70` color-mix + `backdrop-blur-xl`).
+        // CRITICAL: the blur container is NEVER given an opacity animation — an
+        // element with opacity < 1 stops rendering its own backdrop-filter, so a
+        // `fade-in` here would flash the blur off on open. The container only
+        // TRANSLATES in (blur-safe); the entrance FADE lives on the inner items
+        // wrapper below (child opacity doesn't touch the parent's backdrop-filter).
+        <div className="absolute end-0 z-50 mt-1 w-52 overflow-hidden rounded-xl border border-border/60 bg-popover/70 p-1 shadow-xl shadow-black/[0.08] backdrop-blur-xl animate-in slide-in-from-top-1 duration-150">
+          <div className="animate-in fade-in duration-200">
+            {DEFAULT_KIND_CHOICES.map((k) => {
+              const on = value.includes(k);
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => toggle(k)}
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-foreground transition-colors hover:bg-muted/50"
+                >
+                  <span
+                    className={`grid size-4 shrink-0 place-items-center rounded border transition-colors ${
+                      on ? "border-primary bg-primary text-primary-foreground" : "border-border"
+                    }`}
+                  >
+                    {on && <Check className="size-3" />}
+                  </span>
+                  <ChannelLogo kind={k} className="size-4" />
+                  <span className="flex-1 text-start">{t.settings.notifications.kinds[k]}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function NotificationsTab() {
@@ -388,7 +484,7 @@ function NewChannelForm({
       {/* Kind picker — one reusable switcher (real brand logos; scrolls with
           edge-fade + chevrons once the kinds outgrow the width). */}
       <PillSwitcher
-        options={(["email", "webhook", "slack", "discord", "msteams", "in_app"] as ChannelKind[]).map((k) => ({
+        options={(["email", "webhook", "slack", "discord", "msteams"] as ChannelKind[]).map((k) => ({
           value: k,
           label: t.settings.notifications.kinds[k],
           logo: CHANNEL_LOGOS[k],
@@ -606,13 +702,13 @@ function OrgDefaultsCard({
     return m;
   }, [defaults]);
 
-  const set = async (category: string, enabled: boolean, kind: ChannelKind) => {
+  const set = async (category: string, enabled: boolean, kinds: ChannelKind[]) => {
     setBusyCat(category);
     try {
       await notificationsApi.upsertDefault({
         category,
         defaultEnabled: enabled,
-        defaultChannelKind: kind,
+        defaultChannelKinds: kinds,
       });
       await onChange();
     } catch (err) {
@@ -632,7 +728,7 @@ function OrgDefaultsCard({
         {categories.map((cat) => {
           const def = defIndex.get(cat.id);
           const enabled = def?.defaultEnabled ?? cat.defaultEnabled;
-          const kind = (def?.defaultChannelKind ?? "email") as ChannelKind;
+          const kinds = (def?.defaultChannelKinds?.length ? def.defaultChannelKinds : ["email"]) as ChannelKind[];
           const isBusy = busyCat === cat.id;
           return (
             <div
@@ -643,23 +739,15 @@ function OrgDefaultsCard({
                 <p className="text-sm font-medium text-foreground">{cat.label}</p>
                 <p className="text-xs text-muted-foreground">{cat.description}</p>
               </div>
-              <select
-                value={kind}
+              <ChannelMultiSelect
+                value={kinds}
                 disabled={isBusy}
-                onChange={(e) => set(cat.id, enabled, e.target.value as ChannelKind)}
-                className="bg-background border border-border/50 rounded-lg px-2 py-1.5 text-sm"
-              >
-                <option value="email">{t.settings.notifications.kinds.email}</option>
-                <option value="webhook">{t.settings.notifications.kinds.webhook}</option>
-                <option value="slack">{t.settings.notifications.kinds.slack}</option>
-                <option value="discord">{t.settings.notifications.kinds.discord}</option>
-                <option value="msteams">{t.settings.notifications.kinds.msteams}</option>
-                <option value="in_app">{t.settings.notifications.kinds.in_app}</option>
-              </select>
+                onChange={(next) => set(cat.id, enabled, next)}
+              />
               <Toggle
                 checked={enabled}
                 disabled={isBusy}
-                onChange={(v: boolean) => set(cat.id, v, kind)}
+                onChange={(v: boolean) => set(cat.id, v, kinds)}
                 aria-label={interpolate(t.settings.notifications.orgDefaults.notifyAria, {
                   category: cat.label,
                 })}

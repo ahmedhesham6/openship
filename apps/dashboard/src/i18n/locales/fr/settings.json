@@ -501,7 +501,8 @@
     "orgDefaults": {
       "title": "Valeurs par défaut de l'organisation",
       "description": "Valeurs par défaut appliquées lorsqu'un nouveau membre rejoint cette organisation. Les membres peuvent les remplacer par canal.",
-      "notifyAria": "Notifier pour {category}"
+      "notifyAria": "Notifier pour {category}",
+      "nChannels": "{n} canaux"
     }
   },
   "audit": {

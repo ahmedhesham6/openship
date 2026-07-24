@@ -477,7 +477,8 @@
     "orgDefaults": {
       "title": "Padrões da organização",
       "description": "Padrões aplicados quando um novo membro entra nesta organização. Os membros podem substituir por canal.",
-      "notifyAria": "Notificar sobre {category}"
+      "notifyAria": "Notificar sobre {category}",
+      "nChannels": "{n} canais"
     }
   },
   "audit": {

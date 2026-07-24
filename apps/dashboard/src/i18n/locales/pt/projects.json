@@ -293,5 +293,30 @@
     "fixStep1": "Abra o separador Serviços.",
     "fixStep2": "Escolha o serviço que deve ser público.",
     "fixStep3": "Ative a exposição do domínio e escolha a porta pública."
+  },
+  "connections": {
+    "useInProject": "Usar em um projeto",
+    "title": "Usar em um projeto",
+    "subtitle": "Conecte este banco de dados a outro projeto como uma conexão pronta.",
+    "targetLabel": "Projeto",
+    "targetPlaceholder": "Selecione um projeto…",
+    "valueLabel": "Valor para injetar",
+    "valuesLabel": "Valores para injetar",
+    "connectedN": "{count} valor(es) conectado(s) a {project} — reimplante para aplicar.",
+    "modeInternal": "Interno (recomendado)",
+    "modeInternalDesc": "Acesse de forma privada por uma rede compartilhada — sem porta pública. Mesmo servidor auto-hospedado.",
+    "modePublic": "Público",
+    "modePublicDesc": "Usa o host:port publicado. Funciona em qualquer lugar; requer a porta do banco de dados aberta.",
+    "envKeyLabel": "Variável de ambiente",
+    "redeployHint": "Aplicado no próximo deploy do destino.",
+    "cancel": "Cancelar",
+    "connect": "Conectar",
+    "connected": "Conectado — reimplante o destino para aplicar.",
+    "failed": "Não foi possível conectar o serviço.",
+    "cardTitle": "Serviços conectados",
+    "removed": "Conexão removida — reimplante para aplicar.",
+    "remove": "Remover",
+    "modeInternalShort": "Interno",
+    "modePublicShort": "Público"
   }
 }

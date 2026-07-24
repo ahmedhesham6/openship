@@ -15,6 +15,7 @@
     "jobs",
     "backups-restore",
     "custom-servers",
+    "migrate-from-coolify-dokploy-dokku",
     "teams-members",
     "email-webmail",
     "cloud-connect-migration",

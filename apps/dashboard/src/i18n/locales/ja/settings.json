@@ -477,7 +477,8 @@
     "orgDefaults": {
       "title": "組織のデフォルト",
       "description": "新しいメンバーがこの組織に参加したときに適用されるデフォルトです。メンバーはチャンネルごとに上書きできます。",
-      "notifyAria": "{category} で通知"
+      "notifyAria": "{category} で通知",
+      "nChannels": "{n} 個のチャネル"
     }
   },
   "audit": {

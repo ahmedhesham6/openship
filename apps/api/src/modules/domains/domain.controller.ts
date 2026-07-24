@@ -3,10 +3,12 @@
  */
 
 import type { Context } from "hono";
+import { safeErrorMessage } from "@repo/core";
 import { param, assertNotCloud } from "../../lib/controller-helpers";
 import { getRequestContext } from "../../lib/request-context";
 import { permission } from "../../lib/permission";
 import { audit, auditContextFrom } from "../../lib/audit";
+import { streamSSE } from "../../lib/sse";
 import * as domainService from "./domain.service";
 import { maybeProxyCloudProject } from "../../lib/cloud/project-router";
 import type { TAddDomainBody, TUploadCertBody } from "./domain.schema";
@@ -90,6 +92,67 @@ export async function verify(c: Context) {
   // wrapper can use the standard error path while still reading
   // message/cnameVerified/txtVerified from the body. 200 on success.
   return c.json(result, result.verified ? 200 : 422);
+}
+
+/**
+ * POST /domains/:id/verify/stream (SSE) — self-hosted live-log verify. Streams
+ * certbot's output line-by-line (`log`) as the standalone HTTP-01 challenge runs,
+ * then a terminal `complete`. Same generic event contract the edge-setup modal
+ * uses (`useSystemPrepareModal`), minus the consent prompt (verify never prompts).
+ * The plain `verify` above stays for programmatic callers + the cron.
+ */
+export async function verifyStream(c: Context) {
+  const ctx = getRequestContext(c);
+  const id = param(c, "id");
+  await permission.assert(ctx, { resourceType: "domain", resourceId: id, action: "write" });
+
+  return streamSSE(c, async (sse) => {
+    let closed = false;
+    // AWAIT each write. The terminal `complete` is the last thing sent before
+    // this callback returns and Hono closes the SSE — a fire-and-forget
+    // (`void writeSSE`) races that close and gets dropped, leaving the modal
+    // spinning forever even though the backend already succeeded (the exact
+    // "stuck after 'Certificate issued'" bug). Awaiting flushes it first.
+    const emit = async (event: string, data: string) => {
+      if (closed) return;
+      try {
+        await sse.writeSSE({ event, data });
+      } catch {
+        /* client disconnected */
+      }
+    };
+    // The generic prepare modal expects a `session` event to start; verify has no
+    // prompt to answer, so it's just the stream opener.
+    await emit("session", JSON.stringify({ type: "session" }));
+    try {
+      const result = await domainService.verifyDomain(ctx, id, {
+        // Intermediate logs are fire-and-forget — they flush during the run.
+        onLog: (line) => {
+          void emit("log", JSON.stringify({ type: "log", message: line, level: "info" }));
+        },
+      });
+      await emit(
+        "log",
+        JSON.stringify({
+          type: "log",
+          message: result.message ?? (result.verified ? "Verified." : "Not verified."),
+          level: result.verified ? "info" : "error",
+        }),
+      );
+      audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
+        eventType: result.verified ? "domain.verified" : "domain.verify_failed",
+        resourceType: "domain",
+        resourceId: id,
+        after: { verified: result.verified },
+      });
+      await emit("complete", JSON.stringify({ type: "complete", status: result.verified ? "completed" : "failed" }));
+    } catch (err) {
+      await emit("log", JSON.stringify({ type: "log", message: safeErrorMessage(err), level: "error" }));
+      await emit("complete", JSON.stringify({ type: "complete", status: "failed" }));
+    } finally {
+      closed = true;
+    }
+  });
 }
 
 export async function records(c: Context) {

@@ -8,17 +8,16 @@ import { AppLogo } from "@/components/AppLogo";
  * One reusable horizontal pill switcher — a single-select row of icon+label
  * pills. Used anywhere a set of choices needs a compact, branded switcher
  * (email provider presets, notification-channel kinds, …). When the options
- * overflow the width it stays on ONE line: each overflowing end gets a solid
- * surface-color → transparent gradient (so the pills fade cleanly into the
- * container behind the chevron, not into the page) with a left/right chevron to
- * scroll. Set `fadeColor` to match the surface (default = solid card bg). Each
- * option renders its real brand logo via `AppLogo` (`logo` = simpleicons slug,
- * `logoSrc` = explicit URL) and falls back to a lucide `icon`.
+ * overflow the width it stays on ONE line with a left/right chevron to scroll.
  *
- * The edge fade blends into `fadeColor` — a real CSS color, defaulting to the
- * theme's SOLID card background (`--th-card-bg-solid`). It must be a solid color:
- * a Tailwind `from-card` gradient is effectively invisible in the dark/dim themes
- * (where `card` isn't opaque), so the pills never appear to fade under the arrow.
+ * The overflowing edges fade out by MASKING the scroll row to transparent (not
+ * by painting a color overlay) — so the pills dissolve into whatever surface is
+ * actually behind them, matching the container background exactly in every theme
+ * and at any nesting depth. A painted fill can't do this: `bg-card` is a
+ * translucent rgba over the page, so no single opaque color lines up with it.
+ *
+ * Each option renders its real brand logo via `AppLogo` (`logo` = simpleicons
+ * slug, `logoSrc` = explicit URL) and falls back to a lucide `icon`.
  */
 
 export interface PillOption<T extends string> {
@@ -38,17 +37,12 @@ export function PillSwitcher<T extends string>({
   onChange,
   size = "md",
   className = "",
-  fadeColor = "var(--th-card-bg-solid, var(--card))",
 }: {
   options: PillOption<T>[];
   value: T;
   onChange: (value: T) => void;
   size?: "sm" | "md";
   className?: string;
-  /** CSS color the edge fade blends INTO — match the surface behind the switcher.
-   *  MUST be a solid color (default = the theme's solid card bg). Pass e.g.
-   *  `var(--th-bg-solid, var(--background))` on a bare page. */
-  fadeColor?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [edge, setEdge] = useState<{ left: boolean; right: boolean }>({ left: false, right: false });
@@ -88,11 +82,27 @@ export function PillSwitcher<T extends string>({
   const pad = size === "sm" ? "px-2.5 py-1 text-xs" : "px-3 py-1.5 text-[13px]";
   const iconSize = size === "sm" ? "size-3.5" : "size-4";
 
+  // Fade the pills into whatever is actually behind them by masking the scroll
+  // container to transparent at each scrollable edge — no color fill, so it
+  // matches the container background exactly in every theme and nesting (a solid
+  // color overlay never lines up with a translucent `bg-card` surface). Only the
+  // scrollable edges get the fade; a non-scrollable edge stays crisp.
+  const FADE = "2.25rem";
+  const maskImage =
+    edge.left && edge.right
+      ? `linear-gradient(to right, transparent, #000 ${FADE}, #000 calc(100% - ${FADE}), transparent)`
+      : edge.left
+        ? `linear-gradient(to right, transparent, #000 ${FADE})`
+        : edge.right
+          ? `linear-gradient(to right, #000 calc(100% - ${FADE}), transparent)`
+          : undefined;
+
   return (
     <div className={`relative ${className}`}>
       <div
         ref={scrollRef}
         onScroll={measure}
+        style={maskImage ? { maskImage, WebkitMaskImage: maskImage } : undefined}
         className="flex gap-1.5 overflow-x-auto scroll-smooth [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
       >
         {options.map((o) => {
@@ -121,46 +131,28 @@ export function PillSwitcher<T extends string>({
         })}
       </div>
 
-      {/* Left edge: solid surface-color fade (hides the pills scrolling under
-          the chevron) + the scroll-left control on top. Inline gradient into the
-          SOLID surface color so it stays visible in dark/dim (a `from-card`
-          Tailwind gradient fades to a non-opaque color there → no visible fade). */}
+      {/* Scroll controls float over the masked (faded) edge — a frosted circle
+          that blends with the surface via backdrop-blur, no fixed fill color. */}
       {edge.left && (
-        <>
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-y-0 left-0 w-20"
-            style={{ backgroundImage: `linear-gradient(to right, ${fadeColor}, transparent)` }}
-          />
-          <button
-            type="button"
-            onClick={() => scrollByDir(-1)}
-            aria-label="Scroll left"
-            style={{ backgroundColor: fadeColor }}
-            className="absolute left-0 top-1/2 z-10 grid size-7 -translate-y-1/2 place-items-center rounded-full border border-border/60 text-muted-foreground shadow-sm transition-colors hover:text-foreground"
-          >
-            <ChevronLeft className="size-4" />
-          </button>
-        </>
+        <button
+          type="button"
+          onClick={() => scrollByDir(-1)}
+          aria-label="Scroll left"
+          className="absolute left-0 top-1/2 z-10 grid size-7 -translate-y-1/2 place-items-center rounded-full border border-border/60 bg-card text-muted-foreground shadow-sm backdrop-blur-md transition-colors hover:text-foreground"
+        >
+          <ChevronLeft className="size-4" />
+        </button>
       )}
 
       {edge.right && (
-        <>
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-y-0 right-0 w-20"
-            style={{ backgroundImage: `linear-gradient(to left, ${fadeColor}, transparent)` }}
-          />
-          <button
-            type="button"
-            onClick={() => scrollByDir(1)}
-            aria-label="Scroll right"
-            style={{ backgroundColor: fadeColor }}
-            className="absolute right-0 top-1/2 z-10 grid size-7 -translate-y-1/2 place-items-center rounded-full border border-border/60 text-muted-foreground shadow-sm transition-colors hover:text-foreground"
-          >
-            <ChevronRight className="size-4" />
-          </button>
-        </>
+        <button
+          type="button"
+          onClick={() => scrollByDir(1)}
+          aria-label="Scroll right"
+          className="absolute right-0 top-1/2 z-10 grid size-7 -translate-y-1/2 place-items-center rounded-full border border-border/60 bg-card text-muted-foreground shadow-sm backdrop-blur-md transition-colors hover:text-foreground"
+        >
+          <ChevronRight className="size-4" />
+        </button>
       )}
     </div>
   );

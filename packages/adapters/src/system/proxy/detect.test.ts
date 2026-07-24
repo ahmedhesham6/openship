@@ -73,6 +73,39 @@ describe("probeEdge classification", () => {
     expect(status.occupants.every((o) => o.managedByOpenship === false)).toBe(true);
   });
 
+  test("ours when the edge is our host-networked openship-edge container", async () => {
+    // Container-edge topology: OpenResty runs as the `openship-edge` container
+    // with host networking, so (a) our Lua is INSIDE the container (host test -f
+    // misses it) and (b) `docker ps --filter publish` matches nothing (host net).
+    // It must still classify as OURS — the container name lookup + openresty
+    // listener prove it — not a foreign proxy we'd try to take over.
+    const status = await probeEdge(
+      makeExecutor([
+        ["docker ps --filter name=openship-edge", "openship-edge"],
+        ["sport = :80", 'LISTEN 0 511 *:80 *:* users:(("nginx",pid=777,fd=6))'],
+        ["sport = :443", 'LISTEN 0 511 *:443 *:* users:(("nginx",pid=777,fd=8))'],
+        ["-p 777 -o args=", "nginx: master process /usr/local/openresty/nginx/sbin/nginx"],
+      ]),
+    );
+    expect(status.classification).toBe("ours");
+    expect(status.occupants).toHaveLength(0);
+    expect(status.canProceedClean).toBe(true);
+  });
+
+  test("ours when a BRIDGED openship-edge container publishes 80/443", async () => {
+    // Bridge mode: the edge container publishes the ports, so `docker ps --filter
+    // publish` matches it. Recognized as ours by the openship-edge image name.
+    const status = await probeEdge(
+      makeExecutor([
+        ["docker ps --filter publish=80", "openship-edge\tghcr.io/oblien/openship-edge:latest"],
+        ["docker ps --filter publish=443", "openship-edge\tghcr.io/oblien/openship-edge:latest"],
+      ]),
+    );
+    expect(status.classification).toBe("ours");
+    expect(status.occupants).toHaveLength(0);
+    expect(status.canProceedClean).toBe(true);
+  });
+
   test("known when a dockerized traefik owns the ports", async () => {
     const status = await probeEdge(
       makeExecutor([

@@ -82,18 +82,32 @@ export function buildProxyRouteIndex(sites: ImportedSite[]): Map<number, Existin
  */
 export async function scanProxyRoutes(serverId: string): Promise<Map<number, ExistingRoute>> {
   try {
-    return await sshManager.withExecutor(serverId, async (exec: CommandExecutor) => {
-      const edge = await probeEdge(exec);
-      let sites: ImportedSite[];
-      if (edge.classification === "known") {
-        sites = (await importSites(exec, edge)).sites; // never throws; empty for unimportable
-      } else if (edge.classification === "ours") {
-        sites = (await scanOpenshipEdge(exec)).sites; // our OpenResty server blocks
-      } else {
-        return new Map<number, ExistingRoute>();
-      }
-      return buildProxyRouteIndex(sites);
-    });
+    return await sshManager.withExecutor(serverId, scanProxyRoutesWithExecutor);
+  } catch {
+    return new Map<number, ExistingRoute>();
+  }
+}
+
+/**
+ * Executor-scoped core of {@link scanProxyRoutes}. Split out so callers that
+ * already hold the right host executor — e.g. cert reuse on the auto-registered
+ * LOCAL host-server, where `sshManager` (SSH-only) can't connect — can scan the
+ * edge on `createHostExecutor()` instead. Never throws; empty map on any failure.
+ */
+export async function scanProxyRoutesWithExecutor(
+  exec: CommandExecutor,
+): Promise<Map<number, ExistingRoute>> {
+  try {
+    const edge = await probeEdge(exec);
+    let sites: ImportedSite[];
+    if (edge.classification === "known") {
+      sites = (await importSites(exec, edge)).sites; // never throws; empty for unimportable
+    } else if (edge.classification === "ours") {
+      sites = (await scanOpenshipEdge(exec)).sites; // our OpenResty server blocks
+    } else {
+      return new Map<number, ExistingRoute>();
+    }
+    return buildProxyRouteIndex(sites);
   } catch {
     return new Map<number, ExistingRoute>();
   }

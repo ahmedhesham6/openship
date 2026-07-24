@@ -306,5 +306,30 @@
     "fixStep1": "Ouvrez l'onglet Services.",
     "fixStep2": "Sélectionnez le service qui doit être public.",
     "fixStep3": "Activez l'exposition du domaine et choisissez le port public."
+  },
+  "connections": {
+    "useInProject": "Utiliser dans un projet",
+    "title": "Utiliser dans un projet",
+    "subtitle": "Reliez cette base de données à un autre projet comme une connexion prête à l'emploi.",
+    "targetLabel": "Projet",
+    "targetPlaceholder": "Sélectionnez un projet…",
+    "valueLabel": "Valeur à injecter",
+    "valuesLabel": "Valeurs à injecter",
+    "connectedN": "{count} valeur(s) reliée(s) à {project} — redéployez pour appliquer.",
+    "modeInternal": "Interne (recommandé)",
+    "modeInternalDesc": "Accès privé via un réseau partagé — sans port public. Même serveur auto-hébergé.",
+    "modePublic": "Public",
+    "modePublicDesc": "Utilise le host:port publié. Fonctionne partout ; nécessite l'ouverture du port de la base de données.",
+    "envKeyLabel": "Variable d'environnement",
+    "redeployHint": "Appliqué au prochain déploiement de la cible.",
+    "cancel": "Annuler",
+    "connect": "Connecter",
+    "connected": "Connecté — redéployez la cible pour appliquer.",
+    "failed": "Impossible de connecter le service.",
+    "cardTitle": "Services connectés",
+    "removed": "Connexion supprimée — redéployez pour appliquer.",
+    "remove": "Supprimer",
+    "modeInternalShort": "Interne",
+    "modePublicShort": "Public"
   }
 }

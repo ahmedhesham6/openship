@@ -477,7 +477,8 @@
     "orgDefaults": {
       "title": "组织默认设置",
       "description": "当新成员加入此组织时应用的默认设置。成员可按渠道进行覆盖。",
-      "notifyAria": "在 {category} 时通知"
+      "notifyAria": "在 {category} 时通知",
+      "nChannels": "{n} 个渠道"
     }
   },
   "audit": {

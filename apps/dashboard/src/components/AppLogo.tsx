@@ -13,6 +13,11 @@ export const APP_LOGO: Record<
   { slug?: string; src?: string; fill?: boolean; darkInvert?: boolean }
 > = {
   convex: { src: "https://www.google.com/s2/favicons?domain=convex.dev&sz=128" },
+  // simpleicons removed the Slack + Microsoft Teams brand marks (both 404 on the
+  // CDN now), so resolve their official colored favicons like convex above —
+  // otherwise they fall back to a generic monochrome glyph.
+  slack: { src: "https://www.google.com/s2/favicons?domain=slack.com&sz=128" },
+  microsoftteams: { src: "https://www.google.com/s2/favicons?domain=teams.microsoft.com&sz=128" },
   // Supabase's official mark, rendered in its brand green by the simpleicons CDN.
   supabase: { slug: "supabase" },
   mongodb: { slug: "mongodb" },
@@ -32,6 +37,11 @@ export const APP_LOGO: Record<
   minio: { slug: "minio" },
   freshrss: { slug: "freshrss" },
   excalidraw: { slug: "excalidraw" },
+  qdrant: { slug: "qdrant" },
+  // Kafka's catalog id is "kafka"; its simpleicons brand slug is "apachekafka".
+  // The mark is near-black (brand color #231F20), so it vanishes on the dark/dim
+  // tiles — darkInvert flips it to near-white there (dark on light themes as-is).
+  kafka: { slug: "apachekafka", darkInvert: true },
   // Buzz (block/buzz) — vendored bee mark (its own favicon, OS-recolor stripped).
   // Monochrome near-black, so darkInvert flips it to light on the dark themes.
   buzz: { slug: undefined, src: "/app-logos/buzz.svg", darkInvert: true },

@@ -12,6 +12,8 @@ interface Option<T extends string> {
   value: T;
   label: string;
   icon?: React.ReactNode;
+  /** Optional dimmed second line under the label (domain, host, hint …). */
+  description?: string;
 }
 
 interface CustomSelectFooterAction {
@@ -186,9 +188,16 @@ export function CustomSelect<T extends string>({
                   `}
                   type="button"
                 >
-                  <span className="flex items-center gap-2 truncate">
+                  <span className="flex min-w-0 items-center gap-2">
                     {option.icon}
-                    {option.label}
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate">{option.label}</span>
+                      {option.description && (
+                        <span className="truncate text-xs text-muted-foreground/70">
+                          {option.description}
+                        </span>
+                      )}
+                    </span>
                   </span>
                   {isSelected && (
                     <Check className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
@@ -237,9 +246,20 @@ export function CustomSelect<T extends string>({
         `}
         type="button"
       >
-        <span className="flex items-center gap-2 truncate text-foreground/70">
+        <span className="flex min-w-0 items-center gap-2 text-foreground/70">
           {selectedOption?.icon}
-          {selectedOption?.label || <span className="text-muted-foreground">{placeholder}</span>}
+          {selectedOption ? (
+            <span className="flex min-w-0 flex-col text-start">
+              <span className="truncate">{selectedOption.label}</span>
+              {selectedOption.description && (
+                <span className="truncate text-xs font-normal text-muted-foreground/70">
+                  {selectedOption.description}
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">{placeholder}</span>
+          )}
         </span>
         <ChevronDown
           className={`w-4 h-4 text-muted-foreground transition-transform duration-200 flex-shrink-0 ${

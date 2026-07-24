@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import Link from "next/link";
 import { useProjectSettings } from "@/context/ProjectSettingsContext";
 import { usePlatform } from "@/context/PlatformContext";
 import { useI18n, interpolate } from "@/components/i18n-provider";
@@ -212,9 +213,16 @@ export const ProjectSidebar = () => {
             const Icon = TAB_ICONS[tab.id] || LayoutDashboard;
             const isActive = activeTab === tab.id;
             return (
-              <button
+              <Link
                 key={tab.id}
-                onClick={() => handleTabChange(tab.id)}
+                href={`/projects/${projectData.id}/${tab.id}`}
+                onClick={(e) => {
+                  // Let modified/middle clicks open the tab in a new browser tab;
+                  // a plain click switches client-side (snappy, keeps scroll).
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                  e.preventDefault();
+                  handleTabChange(tab.id);
+                }}
                 className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-medium transition-colors ${
                   isActive
                     ? "bg-foreground/[0.07] text-foreground"
@@ -229,7 +237,7 @@ export const ProjectSidebar = () => {
                     aria-label="Routing needs attention"
                   />
                 )}
-              </button>
+              </Link>
             );
           })}
         </div>
@@ -261,9 +269,14 @@ export const ProjectMobileTabs = () => {
           const Icon = TAB_ICONS[tab.id] || LayoutDashboard;
           const isActive = activeTab === tab.id;
           return (
-            <button
+            <Link
               key={tab.id}
-              onClick={() => handleTabChange(tab.id)}
+              href={`/projects/${projectData.id}/${tab.id}`}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                handleTabChange(tab.id);
+              }}
               className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[13px] font-medium whitespace-nowrap transition-colors ${
                 isActive
                   ? "bg-foreground/[0.07] text-foreground"
@@ -278,7 +291,7 @@ export const ProjectMobileTabs = () => {
                   aria-label="Routing needs attention"
                 />
               )}
-            </button>
+            </Link>
           );
         })}
       </div>

@@ -16,7 +16,7 @@
  */
 
 import type { Context } from "hono";
-import { repos } from "@repo/db";
+import { repos, type ChannelKind } from "@repo/db";
 import { getRequestContext } from "../../lib/request-context";
 import { audit, auditContextFrom } from "../../lib/audit";
 import { encrypt } from "../../lib/encryption";
@@ -280,16 +280,28 @@ export async function upsertDefault(c: Context) {
   if (!body.category || typeof body.defaultEnabled !== "boolean") {
     return c.json({ error: "category and defaultEnabled are required" }, 400);
   }
-  const kind = body.defaultChannelKind ?? "email";
-  if (!VALID_CHANNEL_KINDS.has(kind)) {
-    return c.json({ error: "Invalid defaultChannelKind" }, 400);
+  // Multi-channel: accept an array of kinds; tolerate the legacy single
+  // `defaultChannelKind` string. Dedupe + require a non-empty, all-valid set.
+  const rawKinds: unknown[] = Array.isArray(body.defaultChannelKinds)
+    ? body.defaultChannelKinds
+    : body.defaultChannelKind != null
+      ? [body.defaultChannelKind]
+      : ["email"];
+  const kinds = Array.from(new Set(rawKinds)).filter(
+    (k): k is string => typeof k === "string",
+  );
+  if (kinds.length === 0 || !kinds.every((k) => VALID_CHANNEL_KINDS.has(k))) {
+    return c.json(
+      { error: "defaultChannelKinds must be a non-empty list of valid channel kinds" },
+      400,
+    );
   }
 
   const def = await repos.notificationDefault.upsert({
     organizationId: ctx.organizationId,
     category: body.category,
     defaultEnabled: body.defaultEnabled,
-    defaultChannelKind: kind,
+    defaultChannelKinds: kinds as ChannelKind[],
   });
 
   audit.recordAsync(auditContextFrom(c, ctx.organizationId, ctx.userId), {
@@ -299,7 +311,7 @@ export async function upsertDefault(c: Context) {
     after: {
       category: def.category,
       defaultEnabled: def.defaultEnabled,
-      defaultChannelKind: def.defaultChannelKind,
+      defaultChannelKinds: def.defaultChannelKinds,
     },
   });
 

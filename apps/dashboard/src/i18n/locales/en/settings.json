@@ -563,7 +563,8 @@
     "orgDefaults": {
       "title": "Organization defaults",
       "description": "Defaults applied when a new member joins this organization. Members can override per-channel.",
-      "notifyAria": "Notify on {category}"
+      "notifyAria": "Notify on {category}",
+      "nChannels": "{n} channels"
     }
   },
   "audit": {
