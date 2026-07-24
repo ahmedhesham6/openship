@@ -220,3 +220,31 @@ describe("openship domain renew", () => {
     expect(JSON.parse(out)).toEqual(SSL.data);
   });
 });
+
+// ─── verify-ssl (recheck only, no reissue) ───────────────────────────────────
+
+describe("openship domain verify-ssl", () => {
+  it("POSTs /domains/:id/verify-ssl and exits 0 when the cert is valid", async () => {
+    fetchStub = stubFetch(() => ({ json: { data: { domain: "app.example.com", sslStatus: "valid", verified: true } } }));
+    const { err, code } = await runCommand(domainCommand, ["verify-ssl", "d1"]);
+    expect(code).toBe(0);
+    expect(fetchStub.calls[0].method).toBe("POST");
+    expect(fetchStub.calls[0].url).toBe(`${API}/domains/d1/verify-ssl`);
+    expect(err).toContain("status:  valid");
+  });
+
+  it("exits 1 when the certificate is not valid yet", async () => {
+    fetchStub = stubFetch(() => ({ json: { data: { domain: "app.example.com", sslStatus: "pending", verified: false } } }));
+    const { code } = await runCommand(domainCommand, ["verify-ssl", "d1"]);
+    expect(code).toBe(1);
+  });
+
+  it("does NOT exit 1 in json mode even when the cert is not valid", async () => {
+    setJsonMode(true);
+    const data = { domain: "app.example.com", sslStatus: "pending", verified: false };
+    fetchStub = stubFetch(() => ({ json: { data } }));
+    const { out, code } = await runCommand(domainCommand, ["verify-ssl", "d1"]);
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toEqual(data);
+  });
+});
