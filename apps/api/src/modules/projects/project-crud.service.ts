@@ -7,6 +7,7 @@ import {
   slugify,
   NotFoundError,
   ConflictError,
+  ForbiddenError,
   ValidationError,
   SYSTEM,
   safeErrorMessage,
@@ -221,6 +222,13 @@ function resolveProjectSource(data: TCreateProjectBody) {
   // releaseSource — the project-level gitOwner/gitRepo columns stay null so the
   // commit-drift path is never taken for it.
   const isRelease = isReleaseProvider(data.gitProvider);
+  // Release/dist deploys resolve a prebuilt dir onto THIS box's filesystem
+  // (download + extract into ~/.openship) — a self-hosted runtime concern.
+  // Blocked in cloud mode, same as localPath below: the SaaS builds in Oblien
+  // sandboxes and must never write a tenant's dist onto the shared control plane.
+  if (isRelease && env.CLOUD_MODE) {
+    throw new ForbiddenError("Release/dist source projects are not available in cloud mode");
+  }
   const safeLocalPath = !isRelease && data.localPath && !env.CLOUD_MODE ? data.localPath : undefined;
   const gitOwner = isRelease || safeLocalPath ? undefined : data.gitOwner;
   const gitRepo = isRelease || safeLocalPath ? undefined : data.gitRepo;

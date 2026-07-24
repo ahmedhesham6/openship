@@ -67,6 +67,7 @@ import {
 } from "../domains/project-route.service";
 import { kickoffBuild, resolveServicePipelineMode } from "./build-pipeline";
 import { resolveReleaseDist, resolveLatestVersion, readApiVersion } from "../../lib/release-resolver";
+import { env } from "../../config";
 
 function throwPreflightFailure(preflight: PreflightResult): never {
   const failedChecks = preflight.checks.filter((check) => check.status === "fail");
@@ -341,6 +342,14 @@ export async function applyReleaseSourceToSnapshot(
   snapshot: DeploymentConfigSnapshot,
   opts?: { version?: string },
 ): Promise<string> {
+  // Backstop: release/dist resolution downloads + extracts a prebuilt dir onto
+  // THIS box (~/.openship) — a self-hosted runtime op that must never run on the
+  // multi-tenant SaaS control plane. Creation is already blocked in cloud mode
+  // (resolveProjectSource); this also covers redeploy/webhook paths for any
+  // project that predates the gate.
+  if (env.CLOUD_MODE) {
+    throw new ForbiddenError("Release/dist source deploys are not available in cloud mode");
+  }
   const source = (project.releaseSource as ReleaseSource | null) ?? null;
   if (!source) {
     throw new AppError(
